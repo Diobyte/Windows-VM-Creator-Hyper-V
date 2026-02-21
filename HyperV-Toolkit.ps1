@@ -1426,7 +1426,7 @@ function Get-GpuPartitionValues {
     }
 
     [UInt64]$baseVRAM = 1000000000
-    [UInt64]$baseEncode = [UInt64]::MaxValue
+    [UInt64]$baseEncode = 1000000000
     [UInt64]$baseDecode = 1000000000
     [UInt64]$baseCompute = 1000000000
 
@@ -2589,16 +2589,62 @@ function Set-GpuPartitionForVM {
         Write-Log "[$VMName] Could not normalize VM memory mode before GPU-P apply: $($_.Exception.Message)" "WARN"
     }
 
+    $adapter = Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Select-Object -First 1
     $partitionValues = Get-GpuPartitionValues -VMName $VMName -Percentage $AllocationPercent
-    Set-VMGpuPartitionAdapter -VMName $VMName `
-        -MinPartitionVRAM $partitionValues.VRAM -MaxPartitionVRAM $partitionValues.VRAM -OptimalPartitionVRAM $partitionValues.VRAM `
-        -MinPartitionEncode $partitionValues.Encode -MaxPartitionEncode $partitionValues.Encode -OptimalPartitionEncode $partitionValues.Encode `
-        -MinPartitionDecode $partitionValues.Decode -MaxPartitionDecode $partitionValues.Decode -OptimalPartitionDecode $partitionValues.Decode `
-        -MinPartitionCompute $partitionValues.Compute -MaxPartitionCompute $partitionValues.Compute -OptimalPartitionCompute $partitionValues.Compute `
-        -ErrorAction Stop
+
+    $setParams = @{
+        VMName = $VMName
+        ErrorAction = 'Stop'
+    }
+
+    if ($adapter -and [UInt64]$adapter.MaxPartitionVRAM -gt 0) {
+        $setParams['MinPartitionVRAM'] = $partitionValues.VRAM
+        $setParams['MaxPartitionVRAM'] = $partitionValues.VRAM
+        $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM
+    }
+    if ($adapter -and [UInt64]$adapter.MaxPartitionEncode -gt 0) {
+        $setParams['MinPartitionEncode'] = $partitionValues.Encode
+        $setParams['MaxPartitionEncode'] = $partitionValues.Encode
+        $setParams['OptimalPartitionEncode'] = $partitionValues.Encode
+    }
+    if ($adapter -and [UInt64]$adapter.MaxPartitionDecode -gt 0) {
+        $setParams['MinPartitionDecode'] = $partitionValues.Decode
+        $setParams['MaxPartitionDecode'] = $partitionValues.Decode
+        $setParams['OptimalPartitionDecode'] = $partitionValues.Decode
+    }
+    if ($adapter -and [UInt64]$adapter.MaxPartitionCompute -gt 0) {
+        $setParams['MinPartitionCompute'] = $partitionValues.Compute
+        $setParams['MaxPartitionCompute'] = $partitionValues.Compute
+        $setParams['OptimalPartitionCompute'] = $partitionValues.Compute
+    }
+
+    try {
+        if ($setParams.Count -gt 2) {
+            Set-VMGpuPartitionAdapter @setParams
+        } else {
+            Write-Log "[$VMName] GPU capability limits were not fully reported; applying default GPU partition settings." "WARN"
+            Set-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
+        }
+    } catch {
+        Write-Log "[$VMName] Explicit GPU partition sizing failed; retrying with host defaults. Error: $($_.Exception.Message)" "WARN"
+        Set-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
+    }
+
+    $vmConfig = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    [UInt64]$targetLowMmio = 1GB
+    [UInt64]$targetHighMmio = 32GB
+    if ($vmConfig) {
+        if ([UInt64]$vmConfig.LowMemoryMappedIoSpace -gt $targetLowMmio) {
+            $targetLowMmio = [UInt64]$vmConfig.LowMemoryMappedIoSpace
+        }
+        if ([UInt64]$vmConfig.HighMemoryMappedIoSpace -gt $targetHighMmio) {
+            $targetHighMmio = [UInt64]$vmConfig.HighMemoryMappedIoSpace
+        }
+    }
+
     Set-VM -VMName $VMName -GuestControlledCacheTypes $true -ErrorAction Stop
-    Set-VM -VMName $VMName -LowMemoryMappedIoSpace 1GB -ErrorAction Stop
-    Set-VM -VMName $VMName -HighMemoryMappedIoSpace 32GB -ErrorAction Stop
+    Set-VM -VMName $VMName -LowMemoryMappedIoSpace $targetLowMmio -ErrorAction Stop
+    Set-VM -VMName $VMName -HighMemoryMappedIoSpace $targetHighMmio -ErrorAction Stop
 }
 
 #endregion
@@ -6220,6 +6266,11 @@ $btnUpdateGPU.Add_Click({
                     $ctrlGPU["GpuStatus"].Text = "[$VMName] Processing..."
                     $ctrlGPU["GpuStatus"].ForeColor = $theme.Info
                     $ctrlGPU["GpuStatus"].Refresh()
+                }
+
+                if (-not $removeOnlyMode -and [int]$vm.Generation -ne 2) {
+                    Write-Log "[$VMName] Generation $($vm.Generation) VM detected. GPU-P requires Generation 2 VM. Skipping." "ERROR"
+                    continue
                 }
 
                 if (-not $removeOnlyMode -and $gpuVendor -eq 'NVIDIA') {

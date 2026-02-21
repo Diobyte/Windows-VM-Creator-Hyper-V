@@ -118,6 +118,20 @@ Use these to prefill startup values or run validation mode:
 - Verify ISO path permissions and existence.
 - Confirm enough free disk space for VHD operations.
 
+### GPU-P checklist
+
+- Use **Generation 2** VMs for GPU-P.
+- Keep VM **Dynamic Memory disabled** when assigning GPU-P.
+- Ensure VM has GPU virtualization settings applied (`GuestControlledCacheTypes`, MMIO space).
+- Verify host reports partitionable devices:
+
+```powershell
+Get-VMHostPartitionableGpu | Format-List Name,ValidPartitionCounts
+```
+
+- If guest shows Code 12 / insufficient resources, reduce GPU allocation and verify MMIO sizing.
+- Keep host and guest GPU drivers aligned to vendor guidance; for NVIDIA vGPU stacks, ensure licensing/driver branch compatibility.
+
 If helper downloads or external binaries fail signature/validation checks, the action is skipped and logged.
 
 ## Contributing

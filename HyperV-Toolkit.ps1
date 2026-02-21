@@ -4233,9 +4233,6 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
 
         # ---- Create Hyper-V VM ----
-        if (Get-Variable -Name vmWasRunning -Scope Local -ErrorAction SilentlyContinue) {
-            [void]$vmWasRunning
-        }
         Update-CreateProgress -Percent 88 -Status "Creating Hyper-V VM..."
         Write-Log "Creating Generation 2 Hyper-V VM..."
         New-VM -Name $VMName -MemoryStartupBytes ($MemGB * 1GB) -Generation 2 -VHDPath $VHDPath -Path $VMLoc -SwitchName $VMSwitch | Out-Null

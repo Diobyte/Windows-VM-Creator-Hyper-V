@@ -1722,6 +1722,20 @@ $tabCreate.Text        = "  Create VM  "
 $tabCreate.BackColor   = $theme.Card
 $tabCreate.ForeColor   = $theme.Text
 $tabCreate.AutoScroll  = $true
+
+# Use TableLayoutPanel for responsive layout
+$table = New-Object System.Windows.Forms.TableLayoutPanel
+$table.ColumnCount = 2
+$table.RowCount = 4
+$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 520)))
+$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 140)))
+$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 170)))
+$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 250)))
+$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$table.Dock = 'Fill'
+$tabCreate.Controls.Add($table)
+
 $tabControl.TabPages.Add($tabCreate)
 
 $lblCreateHeader = New-Object System.Windows.Forms.Label
@@ -1783,11 +1797,11 @@ function New-LabeledControl {
 $grpConfig           = New-Object System.Windows.Forms.GroupBox
 $grpConfig.Text      = "VM Configuration - Core Settings"
 $grpConfig.ForeColor = $theme.Text
-$grpConfig.Location  = New-Object System.Drawing.Point(8, 18)
-$grpConfig.Size      = New-Object System.Drawing.Size(520, 585)
 $grpConfig.BackColor = $theme.Surface
 $grpConfig.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$tabCreate.Controls.Add($grpConfig)
+$grpConfig.Dock      = 'Fill'
+$table.Controls.Add($grpConfig, 0, 0)
+$table.SetRowSpan($grpConfig, 3)
 
 $rowY = 22
 $ctrlCreate["VMName"] = New-LabeledControl $grpConfig 12 $rowY "VM Name:" -ControlWidth 300
@@ -1893,10 +1907,9 @@ $ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic M
 $grpBoot           = New-Object System.Windows.Forms.GroupBox
 $grpBoot.Text      = "Boot && Hardware - Security"
 $grpBoot.ForeColor = [System.Drawing.Color]::White
-$grpBoot.Location  = New-Object System.Drawing.Point(540, 18)
-$grpBoot.Size      = New-Object System.Drawing.Size(500, 124)
 $grpBoot.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$tabCreate.Controls.Add($grpBoot)
+$grpBoot.Dock      = 'Fill'
+$table.Controls.Add($grpBoot, 1, 0)
 
 $ctrlCreate["SecureBoot"] = New-Object System.Windows.Forms.CheckBox
 $ctrlCreate["SecureBoot"].Text     = "Secure Boot (auto: ON for Win11, OFF for Win10)"
@@ -1926,10 +1939,9 @@ $grpBoot.Controls.Add($ctrlCreate["VHDType"])
 $grpOpts           = New-Object System.Windows.Forms.GroupBox
 $grpOpts.Text      = "VM Options - Runtime"
 $grpOpts.ForeColor = [System.Drawing.Color]::White
-$grpOpts.Location  = New-Object System.Drawing.Point(540, 148)
-$grpOpts.Size      = New-Object System.Drawing.Size(500, 165)
 $grpOpts.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$tabCreate.Controls.Add($grpOpts)
+$grpOpts.Dock      = 'Fill'
+$table.Controls.Add($grpOpts, 1, 1)
 
 $chkNames = @(
     @{ Key = "DynamicMem";       Text = "Enable Dynamic Memory";       X = 14;  Y = 28; Default = $false },
@@ -1962,10 +1974,9 @@ $grpOpts.Controls.Add($ctrlCreate["RoutingHint"])
 $grpSoft           = New-Object System.Windows.Forms.GroupBox
 $grpSoft.Text      = "Post-Install Software && Advanced"
 $grpSoft.ForeColor = [System.Drawing.Color]::White
-$grpSoft.Location  = New-Object System.Drawing.Point(540, 318)
-$grpSoft.Size      = New-Object System.Drawing.Size(500, 240)
 $grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$tabCreate.Controls.Add($grpSoft)
+$grpSoft.Dock      = 'Fill'
+$table.Controls.Add($grpSoft, 1, 2)
 
 $softwareChecks = @(
     @{ Key = "Parsec";       Text = "Parsec (Per Computer)";  X = 14;  Y = 28 },
@@ -1999,51 +2010,44 @@ $btnBrowseGolden.Location = New-Object System.Drawing.Point(438, 210)
 $btnBrowseGolden.FlatStyle = 'Flat'
 $grpSoft.Controls.Add($btnBrowseGolden)
 
+# Bottom panel for controls below GroupBoxes
+$bottomPanel = New-Object System.Windows.Forms.Panel
+$bottomPanel.Dock = 'Fill'
+$table.Controls.Add($bottomPanel, 0, 3)
+$table.SetColumnSpan($bottomPanel, 2)
+
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ModeHint"].Text = "Mode: ISO Deploy - Uses ISO, selected edition, and unattended setup."
 $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 14)
-$ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 600)
+$ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 20)
 $ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
-$tabCreate.Controls.Add($ctrlCreate["ModeHint"])
+$bottomPanel.Controls.Add($ctrlCreate["ModeHint"])
 
 $ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ValidationHint"].Text = "Checks: Name ? | Source ? | Network ? | User ?"
 $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 16)
-$ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 580)
+$ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 0)
 $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
-$tabCreate.Controls.Add($ctrlCreate["ValidationHint"])
-
-# Handle tab resize to move and scale right GroupBoxes
-$tabControl.Add_Resize({
-    $w = $tabControl.ClientSize.Width
-    $newX = 540
-    $newWidth = [Math]::Max(500, $w - 540 - 8)
-    $grpBoot.Location = New-Object System.Drawing.Point($newX, 18)
-    $grpBoot.Size = New-Object System.Drawing.Size($newWidth, 124)
-    $grpOpts.Location = New-Object System.Drawing.Point($newX, 148)
-    $grpOpts.Size = New-Object System.Drawing.Size($newWidth, 165)
-    $grpSoft.Location = New-Object System.Drawing.Point($newX, 318)
-    $grpSoft.Size = New-Object System.Drawing.Size($newWidth, 240)
-})
+$bottomPanel.Controls.Add($ctrlCreate["ValidationHint"])
 
 # Create VM Button
 $btnCreateVM           = New-Object System.Windows.Forms.Button
 $btnCreateVM.Text      = "Create VM"
 $btnCreateVM.Size      = New-Object System.Drawing.Size(140, 36)
-$btnCreateVM.Location  = New-Object System.Drawing.Point(650, 614)
+$btnCreateVM.Location  = New-Object System.Drawing.Point(642, 34)
 $btnCreateVM.FlatStyle = 'Flat'
 $btnCreateVM.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
 $btnCreateVM.ForeColor = [System.Drawing.Color]::White
 $btnCreateVM.Font      = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$tabCreate.Controls.Add($btnCreateVM)
+$bottomPanel.Controls.Add($btnCreateVM)
 
 # Create VM status + progress
 $ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
 $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 18)
-$ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 618)
+$ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 38)
 $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Cyan
-$tabCreate.Controls.Add($ctrlCreate["CreateStatus"])
+$bottomPanel.Controls.Add($ctrlCreate["CreateStatus"])
 
 $ctrlCreate["CreateProgress"] = New-Object System.Windows.Forms.ProgressBar
 $ctrlCreate["CreateProgress"].Minimum = 0
@@ -2051,8 +2055,8 @@ $ctrlCreate["CreateProgress"].Maximum = 100
 $ctrlCreate["CreateProgress"].Value = 0
 $ctrlCreate["CreateProgress"].Style = 'Continuous'
 $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size(450, 14)
-$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 640)
-$tabCreate.Controls.Add($ctrlCreate["CreateProgress"])
+$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 60)
+$bottomPanel.Controls.Add($ctrlCreate["CreateProgress"])
 
 # ============================================================
 #  TAB 2: GPU MANAGER

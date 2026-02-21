@@ -2377,7 +2377,7 @@ function Update-MainLayout {
         $rightButtonGap = 10
         $buttonStackGap = 35
 
-        $tabWidth = [Math]::Max(900, $RootForm.ClientSize.Width - 2 * $margin)
+        $tabWidth = [Math]::Max(720, $RootForm.ClientSize.Width - 2 * $margin)
         $tabHeight = [Math]::Max(620, [Math]::Min(760, $RootForm.ClientSize.Height - 210))
         $tabControl.Location = New-Object System.Drawing.Point($margin, 8)
         $tabControl.Size = New-Object System.Drawing.Size($tabWidth, $tabHeight)
@@ -2411,7 +2411,8 @@ function Update-TabLayouts {
         $sectionGap = 10
 
         # ----- Create tab -----
-        $createWidth = [Math]::Max(700, $tabCreate.ClientSize.Width - (2 * $tabPadding))
+        $createWidth = [Math]::Max(420, $tabCreate.ClientSize.Width - (2 * $tabPadding))
+        $dpiScale = if ($RootForm.DeviceDpi -gt 0) { ($RootForm.DeviceDpi / 96.0) } else { 1.0 }
 
         $checkboxKeysForSizing = @(
             'DynamicMem','EnhancedSession','StartVM','StrictLegacyMode','AutoCreateSwitch','EnableMetering','EnableAutoLogon',
@@ -2427,9 +2428,24 @@ function Update-TabLayouts {
         # Adaptive layout (monitor and DPI agnostic):
         # - Use two columns when both columns can fit safely.
         # - Fall back to one column when width is too narrow, relying on tab scroll.
-        $minLeftColumnWidth = 470
-        $minRightColumnWidth = [Math]::Max(420, ($maxCheckboxPreferredWidth + 140))
-        $canUseTwoColumns = ($createWidth -ge ($minLeftColumnWidth + $sectionGap + $minRightColumnWidth + 4))
+        $bootCheckboxKeys = @('SecureBoot','TPM','VHDType')
+        $bootRequiredWidth = 0
+        foreach ($bootKey in $bootCheckboxKeys) {
+            if ($ctrlCreate.ContainsKey($bootKey) -and $ctrlCreate[$bootKey]) {
+                $bootRequiredWidth = [Math]::Max($bootRequiredWidth, $ctrlCreate[$bootKey].PreferredSize.Width)
+            }
+        }
+
+        $minLeftColumnWidth = [int][Math]::Ceiling(470 * $dpiScale)
+        $minRightColumnWidth = [int][Math]::Ceiling([Math]::Max(
+            [Math]::Max((420 * $dpiScale), ($maxCheckboxPreferredWidth + (140 * $dpiScale))),
+            ($bootRequiredWidth + (38 * $dpiScale))
+        ))
+        $twoColumnSafetyPadding = [int][Math]::Ceiling(36 * $dpiScale)
+        $canUseTwoColumns = ($createWidth -ge ($minLeftColumnWidth + $sectionGap + $minRightColumnWidth + $twoColumnSafetyPadding))
+        if ($dpiScale -ge 1.25) {
+            $canUseTwoColumns = $false
+        }
         $singleCreateColumn = (-not $canUseTwoColumns)
 
         if ($singleCreateColumn) {

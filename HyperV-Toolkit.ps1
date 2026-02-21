@@ -1466,6 +1466,111 @@ function Get-GuestWindowsBuildFromMountedVolume {
     }
 }
 
+function Set-GuestGpuRegistryMitigations {
+    <#
+    .SYNOPSIS
+        Applies GPU-P compatibility registry fixes to a mounted guest Windows volume
+        by loading the offline SYSTEM hive, writing the required service overrides,
+        then unloading it cleanly.
+
+        Changes applied to ALL GPU-P guests
+        ────────────────────────────────────
+        HyperVideo (Hyper-V Synthetic Video)  Start = 4  (Disabled)
+            The synthetic Hyper-V video adapter and a GPU partition adapter cannot
+            both initialise during the same boot. dxgkrnl.sys serialises GPU device
+            start-up; when HyperVideo is present it takes the first slot and the
+            GPU-P adapter never gets a PnP start callback — manifests as a frozen
+            boot spinner.  Disabling the service lets the real GPU-P adapter own
+            the display stack from first boot.
+
+        Additional changes for build >= 26100 (Win11 24H2 / 25H2)
+        ────────────────────────────────────────────────────────────
+        BasicDisplay                          Start = 4  (Disabled)
+            On 24H2+ the basic display fallback driver races with GPU-P adapter
+            initialisation during boot, occasionally winning the race and leaving
+            the GPU-P adapter in a zombie state that hangs dxgkrnl.sys.
+        GraphicsDrivers\TdrDelay             = 60  (seconds)
+            The default TDR timeout is 2 s.  GPU-P adapter enumeration on 24H2+
+            is slower post-update and the early-boot TDR fires before the adapter
+            finishes starting, triggering a recovery loop that freezes the spinner.
+    #>
+    param(
+        [string]$VMName,
+        [string]$MountLetter,
+        [int]$GuestBuild = 0
+    )
+
+    $systemHive = Join-Path "$MountLetter\" 'Windows\System32\Config\SYSTEM'
+    if (-not (Test-Path $systemHive)) {
+        Write-Log "[$VMName] Guest SYSTEM hive not found at '$systemHive'; skipping registry mitigations." "WARN"
+        return
+    }
+
+    $hiveName = "__gpup_sysfix_$([Guid]::NewGuid().ToString('N'))"
+    $hiveRoot = "HKU\$hiveName"
+    $loaded   = $false
+
+    try {
+        & reg.exe load $hiveRoot "$systemHive" *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "[$VMName] Could not load guest SYSTEM hive for GPU-P registry mitigations (exit $LASTEXITCODE)." "WARN"
+            return
+        }
+        $loaded = $true
+
+        # Determine which control sets exist in this hive
+        $controlSets = @('ControlSet001','ControlSet002') | Where-Object {
+            Test-Path "Registry::$hiveRoot\$_"
+        }
+        if (-not $controlSets) { $controlSets = @('ControlSet001') }
+
+        foreach ($cs in $controlSets) {
+            $svcBase = "Registry::$hiveRoot\$cs\Services"
+
+            # ── HyperVideo: disable Hyper-V synthetic video adapter ──────────────
+            $hyperVideoPath = "$svcBase\HyperVideo"
+            if (-not (Test-Path $hyperVideoPath)) {
+                New-Item -Path $hyperVideoPath -Force | Out-Null
+            }
+            Set-ItemProperty -Path $hyperVideoPath -Name 'Start' -Value 4 -Type DWord -Force
+            Write-Log "[$VMName] [$cs] HyperVideo service disabled (GPU-P conflict prevention)." "INFO"
+
+            # ── Per-build mitigations for Win11 24H2 / 25H2 (build >= 26100) ────
+            if ($GuestBuild -ge 26100) {
+
+                # BasicDisplay: disable fallback display driver race
+                $basicDisplayPath = "$svcBase\BasicDisplay"
+                if (-not (Test-Path $basicDisplayPath)) {
+                    New-Item -Path $basicDisplayPath -Force | Out-Null
+                }
+                Set-ItemProperty -Path $basicDisplayPath -Name 'Start' -Value 4 -Type DWord -Force
+                Write-Log "[$VMName] [$cs] BasicDisplay service disabled (24H2/25H2 race mitigation)." "INFO"
+
+                # TdrDelay: extend GPU TDR timeout to survive slow GPU-P adapter init
+                $gfxDriversPath = "Registry::$hiveRoot\$cs\Control\GraphicsDrivers"
+                if (-not (Test-Path $gfxDriversPath)) {
+                    New-Item -Path $gfxDriversPath -Force | Out-Null
+                }
+                Set-ItemProperty -Path $gfxDriversPath -Name 'TdrDelay' -Value 60 -Type DWord -Force
+                Write-Log "[$VMName] [$cs] TdrDelay extended to 60s (24H2/25H2 slow GPU-P init mitigation)." "INFO"
+            }
+        }
+
+        Write-Log "[$VMName] Guest GPU-P registry mitigations applied successfully." "OK"
+    } catch {
+        Write-Log "[$VMName] Guest GPU-P registry mitigation error: $($_.Exception.Message)" "WARN"
+    } finally {
+        if ($loaded) {
+            [GC]::Collect()
+            Start-Sleep -Milliseconds 500
+            & reg.exe unload $hiveRoot *> $null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Log "[$VMName] Warning: guest SYSTEM hive unload returned exit $LASTEXITCODE. A reboot of the host may be needed to release the hive lock." "WARN"
+            }
+        }
+    }
+}
+
 function Get-DriverVersionBranch {
     param([string]$VersionString)
 
@@ -1485,124 +1590,40 @@ function Get-DriverVersionBranch {
 function Get-GpuPartitionValues {
     <#
     .SYNOPSIS
-        Calculates GPU partition adapter VRAM/Encode/Decode/Compute values
-        based on a resource allocation percentage (Diobyte Version 1 approach).
+        Returns GPU partition resource-budget token values for Min/Max/Optimal.
+
+        These values are NORMALISED RESOURCE-BUDGET TOKENS (0..1,000,000,000)
+        — they are NOT physical VRAM byte counts.
+
+        The reference implementation (bryanem32/hyperv_vm_creator v29) uses the
+        proven-stable anchor:  Min = 80,000,000   Max = Optimal = 100,000,000
+        at 100% allocation. We scale those anchors linearly with the UI slider so
+        the user retains control while staying within the safe operating range.
+
+        Reading adapter.MaxPartitionVRAM after Add-VMGpuPartitionAdapter returns
+        the raw hardware VRAM in bytes (e.g. 8,589,934,592 for an 8 GB card) —
+        using those bytes as budget tokens produces values 80x too large, causing
+        dxgkrnl.sys to attempt an un-backed VRAM mapping that deadlocks on boot.
     #>
     param(
-        [string]$VMName,
+        [string]$VMName,           # reserved for future per-VM query; not used
         [ValidateRange(10,100)]
         [int]$Percentage = 100
     )
 
-    $adapter = $null
-    try {
-        if (-not [string]::IsNullOrWhiteSpace($VMName)) {
-            $adapter = Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Select-Object -First 1
-        }
-    } catch {
-        $adapter = $null
-    }
+    $factor = [Math]::Max(0.1, [Math]::Min(1.0, $Percentage / 100.0))
 
-    [UInt64]$baseVRAM = 1000000000
-    [UInt64]$baseEncode = 1000000000
-    [UInt64]$baseDecode = 1000000000
-    [UInt64]$baseCompute = 1000000000
+    [UInt64]$maxVal = [UInt64][Math]::Floor(100000000 * $factor)
+    [UInt64]$minVal = [UInt64][Math]::Floor( 80000000 * $factor)
+    if ($minVal -lt 1)           { $minVal = 1 }
+    if ($maxVal -lt $minVal)     { $maxVal = $minVal }
 
-    if ($adapter) {
-        if ([UInt64]$adapter.MaxPartitionVRAM -gt 0) { $baseVRAM = [UInt64]$adapter.MaxPartitionVRAM }
-        if ([UInt64]$adapter.MaxPartitionEncode -gt 0) { $baseEncode = [UInt64]$adapter.MaxPartitionEncode }
-        if ([UInt64]$adapter.MaxPartitionDecode -gt 0) { $baseDecode = [UInt64]$adapter.MaxPartitionDecode }
-        if ([UInt64]$adapter.MaxPartitionCompute -gt 0) { $baseCompute = [UInt64]$adapter.MaxPartitionCompute }
-    }
-
-    $factor = ($Percentage / 100.0)
-    if ($factor -le 0) { $factor = 1.0 }
-
-    # Safe UInt64 multiplication: [double] can exceed [UInt64]::MaxValue due to
-    # precision loss (e.g. [double][UInt64]::MaxValue rounds up), so clamp before cast.
-    $maxU64 = [UInt64]::MaxValue
-    $safeUInt64Mul = {
-        param([UInt64]$Base, [double]$Factor)
-        if ($Factor -ge 1.0 -and $Base -eq $maxU64) { return $maxU64 }
-        $raw = [math]::Floor([double]$Base * $Factor)
-        if ($raw -ge [double]$maxU64) { return $maxU64 }
-        if ($raw -lt 1) { return [UInt64]1 }
-        return [UInt64]$raw
-    }
-
-    $getResourceValues = {
-        param(
-            [UInt64]$Min,
-            [UInt64]$Max,
-            [UInt64]$Optimal,
-            [UInt64]$FallbackBase,
-            [double]$ScaleFactor
-        )
-
-        if ($Max -gt 0) {
-            [UInt64]$effectiveMin = if ($Min -gt 0) { $Min } else { 1 }
-            if ($effectiveMin -gt $Max) { $effectiveMin = $Max }
-
-            [UInt64]$scaled = $effectiveMin
-            if ($Max -gt $effectiveMin) {
-                $range = [double]($Max - $effectiveMin)
-                $rawScaled = [math]::Floor([double]$effectiveMin + ($range * $ScaleFactor))
-                if ($rawScaled -ge [double]$maxU64) {
-                    $scaled = $maxU64
-                } else {
-                    $scaled = [UInt64]$rawScaled
-                }
-            }
-
-            if ($scaled -lt $effectiveMin) { $scaled = $effectiveMin }
-            if ($scaled -gt $Max) { $scaled = $Max }
-
-            # Optimal must be capped to $scaled (the percentage-adjusted Max), not to
-            # the raw hardware $Max. If Optimal > $scaled the guest driver uses the
-            # larger Optimal value as its true ceiling, bypassing the slider entirely
-            # and mapping the full hardware VRAM aperture — causing a boot deadlock.
-            [UInt64]$effectiveOptimal = if ($Optimal -gt 0) { $Optimal } else { $scaled }
-            if ($effectiveOptimal -lt $effectiveMin) { $effectiveOptimal = $effectiveMin }
-            if ($effectiveOptimal -gt $scaled) { $effectiveOptimal = $scaled }
-
-            return @{
-                Supported = $true
-                Min = $effectiveMin
-                Max = $scaled
-                Optimal = $effectiveOptimal
-            }
-        }
-
-        [UInt64]$fallback = & $safeUInt64Mul $FallbackBase $ScaleFactor
-        return @{
-            Supported = $false
-            Min = $fallback
-            Max = $fallback
-            Optimal = $fallback
-        }
-    }
-
+    $entry = @{ Supported = $true; Min = $minVal; Max = $maxVal; Optimal = $maxVal }
     return @{
-        VRAM    = if ($adapter) {
-            & $getResourceValues ([UInt64]$adapter.MinPartitionVRAM) ([UInt64]$adapter.MaxPartitionVRAM) ([UInt64]$adapter.OptimalPartitionVRAM) $baseVRAM $factor
-        } else {
-            & $getResourceValues 0 0 0 $baseVRAM $factor
-        }
-        Encode  = if ($adapter) {
-            & $getResourceValues ([UInt64]$adapter.MinPartitionEncode) ([UInt64]$adapter.MaxPartitionEncode) ([UInt64]$adapter.OptimalPartitionEncode) $baseEncode $factor
-        } else {
-            & $getResourceValues 0 0 0 $baseEncode $factor
-        }
-        Decode  = if ($adapter) {
-            & $getResourceValues ([UInt64]$adapter.MinPartitionDecode) ([UInt64]$adapter.MaxPartitionDecode) ([UInt64]$adapter.OptimalPartitionDecode) $baseDecode $factor
-        } else {
-            & $getResourceValues 0 0 0 $baseDecode $factor
-        }
-        Compute = if ($adapter) {
-            & $getResourceValues ([UInt64]$adapter.MinPartitionCompute) ([UInt64]$adapter.MaxPartitionCompute) ([UInt64]$adapter.OptimalPartitionCompute) $baseCompute $factor
-        } else {
-            & $getResourceValues 0 0 0 $baseCompute $factor
-        }
+        VRAM    = $entry
+        Encode  = $entry
+        Decode  = $entry
+        Compute = $entry
     }
 }
 
@@ -3060,10 +3081,9 @@ function Set-GpuPartitionForVM {
     }
 
     $vmConfig = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    [UInt64]$targetLowMmio  = 3GB
-    # 128 GB high MMIO is the safe default for GPU-P. 32 GB is insufficient for
-    # GPUs with large framebuffers (e.g. 16 GB+ VRAM) and causes guest freezes
-    # when the hypervisor cannot map the full BAR2 aperture.
+    # Reference: bryanem32/hyperv_vm_creator v29 uses LowMMIO=1GB, HighMMIO=32GB.
+    # We keep HighMMIO at 128GB (better for large-VRAM cards) but align Low to 1GB.
+    [UInt64]$targetLowMmio  = 1GB
     [UInt64]$targetHighMmio = 128GB
     if ($vmConfig) {
         if ([UInt64]$vmConfig.LowMemoryMappedIoSpace -gt $targetLowMmio) {
@@ -6893,7 +6913,23 @@ $btnUpdateGPU.Add_Click({
                         Write-Log "$msg Strict checks disabled: skipping host GPU file injection for boot stability." "WARN"
                         $skipHostDriverInjection = $true
                     }
+
+                    # Windows 11 24H2 / 25H2 (build >= 26100) contains a known dxgkrnl.sys
+                    # bug where GPU-P causes the boot animation to freeze and the Hyper-V
+                    # console to hang until a cumulative Windows Update (including Preview /
+                    # optional updates) is installed inside the guest VM. This is the same
+                    # issue documented in bryanem32/hyperv_vm_creator README (v21 changelog).
+                    # GPU drivers will still be injected, but the guest MUST run Windows
+                    # Update (including previews) before GPU-P will function without freezing.
+                    if ($guestBuild -ge 26100) {
+                        Write-Log "[$VMName] WARNING: Guest is Windows 11 24H2/25H2 (build $guestBuild). A known Microsoft bug in dxgkrnl.sys causes GPU-P to freeze the boot animation on this build. FIX: Boot the guest WITHOUT GPU-P first, run Windows Update (Settings > Windows Update > Advanced > Optional Updates — install ALL), reboot the guest, then re-run GPU Setup." "WARN"
+                    }
                 }
+
+                # Apply GPU-P registry mitigations to the guest SYSTEM hive while the VHD
+                # is mounted. This disables HyperVideo (synthetic video / GPU-P conflict)
+                # and on 24H2/25H2 also patches the TDR timeout and BasicDisplay race.
+                Set-GuestGpuRegistryMitigations -VMName $VMName -MountLetter $mountLetter -GuestBuild $guestBuild
 
                 if (-not $removeOnlyMode -and $gpuVendor -eq 'NVIDIA' -and $hostNvidiaVersion) {
                     $guestNvidiaVersion = Get-NvidiaDriverVersionFromGuestStore -MountLetter $mountLetter
@@ -6932,6 +6968,23 @@ $btnUpdateGPU.Add_Click({
                 if (-not $copyResult.Success) {
                     Write-Log "[$VMName] GPU driver copy failed." "ERROR"
                     continue
+                }
+
+                # Copy vendor-specific kernel-mode GPU-P interface files from host System32.
+                # These files (nv*, amdkmd*, igfx*) are required for the guest dxgkrnl.sys
+                # to attach to the GPU partition during early boot. Without them the guest
+                # GPU driver stack is incomplete and the VM freezes at the boot animation.
+                # Reference: bryanem32/hyperv_vm_creator v29 copies these for all vendors.
+                $sys32Mask = switch -Wildcard ($gpuVendor) {
+                    'NVIDIA' { 'nv*' }
+                    'AMD'    { 'amdkmd*' }
+                    'Intel'  { 'igfx*' }
+                    default  { $null }
+                }
+                if ($sys32Mask) {
+                    Write-Log "[$VMName] Copying vendor GPU-P kernel files ($sys32Mask) from host System32 to guest System32..." "INFO"
+                    Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
+                        -Source "$env:SystemRoot\System32" -Destination 'Windows\System32' -FileMask $sys32Mask | Out-Null
                 }
 
                 # Copy precise file set referenced by active display driver package(s)

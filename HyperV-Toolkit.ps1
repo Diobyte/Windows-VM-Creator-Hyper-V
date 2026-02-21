@@ -1786,6 +1786,7 @@ $grpConfig.ForeColor = $theme.Text
 $grpConfig.Location  = New-Object System.Drawing.Point(8, 18)
 $grpConfig.Size      = New-Object System.Drawing.Size(520, 585)
 $grpConfig.BackColor = $theme.Surface
+$grpConfig.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $tabCreate.Controls.Add($grpConfig)
 
 $rowY = 22
@@ -1894,6 +1895,7 @@ $grpBoot.Text      = "Boot && Hardware - Security"
 $grpBoot.ForeColor = [System.Drawing.Color]::White
 $grpBoot.Location  = New-Object System.Drawing.Point(540, 18)
 $grpBoot.Size      = New-Object System.Drawing.Size(500, 124)
+$grpBoot.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabCreate.Controls.Add($grpBoot)
 
 $ctrlCreate["SecureBoot"] = New-Object System.Windows.Forms.CheckBox
@@ -1926,6 +1928,7 @@ $grpOpts.Text      = "VM Options - Runtime"
 $grpOpts.ForeColor = [System.Drawing.Color]::White
 $grpOpts.Location  = New-Object System.Drawing.Point(540, 148)
 $grpOpts.Size      = New-Object System.Drawing.Size(500, 165)
+$grpOpts.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabCreate.Controls.Add($grpOpts)
 
 $chkNames = @(
@@ -1961,6 +1964,7 @@ $grpSoft.Text      = "Post-Install Software && Advanced"
 $grpSoft.ForeColor = [System.Drawing.Color]::White
 $grpSoft.Location  = New-Object System.Drawing.Point(540, 318)
 $grpSoft.Size      = New-Object System.Drawing.Size(500, 240)
+$grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabCreate.Controls.Add($grpSoft)
 
 $softwareChecks = @(

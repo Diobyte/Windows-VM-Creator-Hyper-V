@@ -2879,45 +2879,6 @@ $ctrlCreate["RoutingHint"].ForeColor = $theme.Muted
 $ctrlCreate["RoutingHint"].AutoEllipsis = $true
 $grpOpts.Controls.Add($ctrlCreate["RoutingHint"])
 
-# GroupBox: Post-Install Software
-$grpSoft           = New-Object System.Windows.Forms.GroupBox
-$grpSoft.Text      = "Post-Install Software && Advanced"
-$grpSoft.ForeColor = [System.Drawing.Color]::White
-$grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$tabCreate.Controls.Add($grpSoft)
-
-$softwareChecks = @(
-    @{ Key = "Parsec";       Text = "Parsec (Per Computer)";  X = 14;  Y = 28 },
-    @{ Key = "VBCable";      Text = "VB-Audio Cable";         X = 274; Y = 28 },
-    @{ Key = "USBMMIDD";     Text = "Virtual Display Driver"; X = 14;  Y = 58 },
-    @{ Key = "RDP";          Text = "Remote Desktop";         X = 274; Y = 58 },
-    @{ Key = "Share";        Text = "Share Folder";           X = 14;  Y = 88 },
-    @{ Key = "PauseUpdate";  Text = "Pause Win Updates";      X = 274; Y = 88 },
-    @{ Key = "FullUpdate";   Text = "Full Win Updates";       X = 14;  Y = 118 },
-    @{ Key = "NestedVirt";   Text = "Nested Virtualization";  X = 274; Y = 118 },
-    @{ Key = "NestedNetFollowup"; Text = "Nested Net (MAC spoofing)"; X = 14;  Y = 148 },
-    @{ Key = "ResetBootOrder";    Text = "Reset boot order after recovery"; X = 274; Y = 148 },
-    @{ Key = "GoldenImage";       Text = "Create from Golden VHDX"; X = 14; Y = 178 }
-)
-foreach ($sw in $softwareChecks) {
-    $cb = New-Object System.Windows.Forms.CheckBox
-    $cb.Text     = $sw.Text
-    $cb.AutoSize = $true
-    $cb.Checked  = $false
-    $cb.Location = New-Object System.Drawing.Point($sw.X, $sw.Y)
-    $cb.ForeColor = [System.Drawing.Color]::White
-    $grpSoft.Controls.Add($cb)
-    $ctrlCreate[$sw.Key] = $cb
-}
-
-$ctrlCreate["GoldenParentVHD"] = New-LabeledControl $grpSoft 14 212 "Parent VHDX:" -ControlWidth 315
-$btnBrowseGolden = New-Object System.Windows.Forms.Button
-$btnBrowseGolden.Text     = "Browse"
-$btnBrowseGolden.Size     = New-Object System.Drawing.Size(52, 24)
-$btnBrowseGolden.Location = New-Object System.Drawing.Point(438, 210)
-$btnBrowseGolden.FlatStyle = 'Flat'
-$grpSoft.Controls.Add($btnBrowseGolden)
-
 # Bottom controls - added directly to $tabCreate; Update-TabLayouts positions them.
 
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
@@ -3328,6 +3289,116 @@ $ctrlGPU["GpuStatus"].AutoSize = $false
 $tabGPU.Controls.Add($ctrlGPU["GpuStatus"])
 
 # ============================================================
+#  TAB 3: ENVIRONMENT
+# ============================================================
+$tabEnv             = New-Object System.Windows.Forms.TabPage
+$tabEnv.Text        = "  Environment  "
+$tabEnv.BackColor   = $theme.Card
+$tabEnv.ForeColor   = $theme.Text
+$tabEnv.AutoScroll  = $true
+$tabEnv.Padding     = New-Object System.Windows.Forms.Padding(8)
+$tabControl.TabPages.Add($tabEnv)
+
+$lblEnvHeader = New-Object System.Windows.Forms.Label
+$lblEnvHeader.Text = "System environment information and Hyper-V status"
+$lblEnvHeader.AutoSize = $true
+$lblEnvHeader.Location = New-Object System.Drawing.Point(10, 2)
+$lblEnvHeader.ForeColor = $theme.Muted
+$lblEnvHeader.Font = $script:FontHeader
+$tabEnv.Controls.Add($lblEnvHeader)
+
+$ctrlEnv = @{}
+
+# GroupBox: System Information
+$grpSysInfo           = New-Object System.Windows.Forms.GroupBox
+$grpSysInfo.Text      = "System Information"
+$grpSysInfo.ForeColor = [System.Drawing.Color]::White
+$grpSysInfo.Location  = New-Object System.Drawing.Point(8, 18)
+$grpSysInfo.Size      = New-Object System.Drawing.Size(600, 200)
+$tabEnv.Controls.Add($grpSysInfo)
+
+$rowY = 22
+$ctrlEnv["HostOS"] = New-LabeledControl $grpSysInfo 12 $rowY "Host OS:" -ControlWidth 400 -ControlType Label
+$ctrlEnv["HostOS"].Text = $script:HostOsName
+$rowY += 36
+
+$ctrlEnv["HyperVStatus"] = New-LabeledControl $grpSysInfo 12 $rowY "Hyper-V Status:" -ControlWidth 400 -ControlType Label
+$hyperVFeature = Get-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -ErrorAction SilentlyContinue
+$hyperVStatus = if ($hyperVFeature -and $hyperVFeature.State -eq "Enabled") { "Enabled" } else { "Disabled" }
+$ctrlEnv["HyperVStatus"].Text = $hyperVStatus
+$rowY += 36
+
+$ctrlEnv["VMMSService"] = New-LabeledControl $grpSysInfo 12 $rowY "VMMS Service:" -ControlWidth 400 -ControlType Label
+$vmmsService = Get-Service -Name vmms -ErrorAction SilentlyContinue
+$vmmsStatus = if ($vmmsService) { $vmmsService.Status } else { "Not found" }
+$ctrlEnv["VMMSService"].Text = $vmmsStatus
+$rowY += 36
+
+$ctrlEnv["TotalRAM"] = New-LabeledControl $grpSysInfo 12 $rowY "Total RAM (GB):" -ControlWidth 400 -ControlType Label
+$totalRamGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$ctrlEnv["TotalRAM"].Text = $totalRamGB
+$rowY += 36
+
+$ctrlEnv["ProcessorCount"] = New-LabeledControl $grpSysInfo 12 $rowY "Logical Processors:" -ControlWidth 400 -ControlType Label
+$ctrlEnv["ProcessorCount"].Text = [Environment]::ProcessorCount
+
+# GroupBox: GPU Information
+$grpGpuInfo           = New-Object System.Windows.Forms.GroupBox
+$grpGpuInfo.Text      = "GPU Information"
+$grpGpuInfo.ForeColor = [System.Drawing.Color]::White
+$grpGpuInfo.Location  = New-Object System.Drawing.Point(620, 18)
+$grpGpuInfo.Size      = New-Object System.Drawing.Size(600, 200)
+$tabEnv.Controls.Add($grpGpuInfo)
+
+$rowY = 22
+$ctrlEnv["GpuPEnabled"] = New-LabeledControl $grpGpuInfo 12 $rowY "GPU-P Available:" -ControlWidth 400 -ControlType Label
+$ctrlEnv["GpuPEnabled"].Text = if ($script:SupportsGpuInstancePath) { "Yes" } else { "No" }
+$rowY += 36
+
+$ctrlEnv["GpuCount"] = New-LabeledControl $grpGpuInfo 12 $rowY "GPU Count:" -ControlWidth 400 -ControlType Label
+$gpuCount = (Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Measure-Object).Count
+$ctrlEnv["GpuCount"].Text = $gpuCount
+
+# GroupBox: Software && Settings
+$grpSoft           = New-Object System.Windows.Forms.GroupBox
+$grpSoft.Text      = "Software && Settings"
+$grpSoft.ForeColor = [System.Drawing.Color]::White
+$grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$tabEnv.Controls.Add($grpSoft)
+
+$softwareChecks = @(
+    @{ Key = "Parsec";       Text = "Parsec (Per Computer)";  X = 14;  Y = 28 },
+    @{ Key = "VBCable";      Text = "VB-Audio Cable";         X = 274; Y = 28 },
+    @{ Key = "USBMMIDD";     Text = "Virtual Display Driver"; X = 14;  Y = 58 },
+    @{ Key = "RDP";          Text = "Remote Desktop";         X = 274; Y = 58 },
+    @{ Key = "Share";        Text = "Share Folder";           X = 14;  Y = 88 },
+    @{ Key = "PauseUpdate";  Text = "Pause Win Updates";      X = 274; Y = 88 },
+    @{ Key = "FullUpdate";   Text = "Full Win Updates";       X = 14;  Y = 118 },
+    @{ Key = "NestedVirt";   Text = "Nested Virtualization";  X = 274; Y = 118 },
+    @{ Key = "NestedNetFollowup"; Text = "Nested Net (MAC spoofing)"; X = 14;  Y = 148 },
+    @{ Key = "ResetBootOrder";    Text = "Reset boot order after recovery"; X = 274; Y = 148 },
+    @{ Key = "GoldenImage";       Text = "Create from Golden VHDX"; X = 14; Y = 178 }
+)
+foreach ($sw in $softwareChecks) {
+    $cb = New-Object System.Windows.Forms.CheckBox
+    $cb.Text     = $sw.Text
+    $cb.AutoSize = $true
+    $cb.Checked  = $false
+    $cb.Location = New-Object System.Drawing.Point($sw.X, $sw.Y)
+    $cb.ForeColor = [System.Drawing.Color]::White
+    $grpSoft.Controls.Add($cb)
+    $ctrlCreate[$sw.Key] = $cb
+}
+
+$ctrlCreate["GoldenParentVHD"] = New-LabeledControl $grpSoft 14 212 "Parent VHDX:" -ControlWidth 315
+$btnBrowseGolden = New-Object System.Windows.Forms.Button
+$btnBrowseGolden.Text     = "Browse"
+$btnBrowseGolden.Size     = New-Object System.Drawing.Size(52, 24)
+$btnBrowseGolden.Location = New-Object System.Drawing.Point(438, 210)
+$btnBrowseGolden.FlatStyle = 'Flat'
+$grpSoft.Controls.Add($btnBrowseGolden)
+
+# ============================================================
 #  SHARED LOG PANEL
 # ============================================================
 $script:LogBox           = New-Object System.Windows.Forms.RichTextBox
@@ -3440,6 +3511,7 @@ function Update-TabLayouts {
 
     $tabCreate.SuspendLayout()
     $tabGPU.SuspendLayout()
+    $tabEnv.SuspendLayout()
     try {
         $tabPadding = 8
         $sectionGap = 10
@@ -3509,67 +3581,14 @@ function Update-TabLayouts {
         }
         $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, ($rightWidth - 24)), 40)
 
-        $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
-        $softLeftKeys = @("Parsec","USBMMIDD","Share","FullUpdate","NestedNetFollowup","GoldenImage")
-        $softRightKeys = @("VBCable","RDP","PauseUpdate","NestedVirt","ResetBootOrder")
-        $softLeftPreferred = (($softLeftKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
-        $softRightPreferred = (($softRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
-        $softRequiredTwoCol = [Math]::Max(520, ($softLeftPreferred + $softRightPreferred + 70))
-        $softUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge $softRequiredTwoCol)
-        $goldenLabel = $grpSoft.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq 'Parent VHDX:' } | Select-Object -First 1
-
-        if ($softUseTwoCol) {
-            $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 274)
-            $softRightX = [Math]::Max([int]($softLeftPreferred + 42), [int]($rightWidth * 0.52))
-
-            $ctrlCreate["Parsec"].Location            = New-Object System.Drawing.Point(14, 28)
-            $ctrlCreate["USBMMIDD"].Location          = New-Object System.Drawing.Point(14, 58)
-            $ctrlCreate["Share"].Location             = New-Object System.Drawing.Point(14, 88)
-            $ctrlCreate["FullUpdate"].Location        = New-Object System.Drawing.Point(14, 118)
-            $ctrlCreate["NestedNetFollowup"].Location = New-Object System.Drawing.Point(14, 148)
-            $ctrlCreate["GoldenImage"].Location       = New-Object System.Drawing.Point(14, 178)
-
-            $ctrlCreate["VBCable"].Location        = New-Object System.Drawing.Point($softRightX, 28)
-            $ctrlCreate["RDP"].Location            = New-Object System.Drawing.Point($softRightX, 58)
-            $ctrlCreate["PauseUpdate"].Location    = New-Object System.Drawing.Point($softRightX, 88)
-            $ctrlCreate["NestedVirt"].Location     = New-Object System.Drawing.Point($softRightX, 118)
-            $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($softRightX, 148)
-
-            if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 216) }
-            $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(114, 212)
-            $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(214, ($rightWidth - $btnBrowseGolden.Width - 10)), 210)
-        } else {
-            $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 432)
-
-            $ctrlCreate["Parsec"].Location            = New-Object System.Drawing.Point(14, 28)
-            $ctrlCreate["VBCable"].Location           = New-Object System.Drawing.Point(14, 58)
-            $ctrlCreate["USBMMIDD"].Location          = New-Object System.Drawing.Point(14, 88)
-            $ctrlCreate["RDP"].Location               = New-Object System.Drawing.Point(14, 118)
-            $ctrlCreate["Share"].Location             = New-Object System.Drawing.Point(14, 148)
-            $ctrlCreate["PauseUpdate"].Location       = New-Object System.Drawing.Point(14, 178)
-            $ctrlCreate["FullUpdate"].Location        = New-Object System.Drawing.Point(14, 208)
-            $ctrlCreate["NestedVirt"].Location        = New-Object System.Drawing.Point(14, 238)
-            $ctrlCreate["NestedNetFollowup"].Location = New-Object System.Drawing.Point(14, 268)
-            $ctrlCreate["ResetBootOrder"].Location    = New-Object System.Drawing.Point(14, 298)
-            $ctrlCreate["GoldenImage"].Location       = New-Object System.Drawing.Point(14, 328)
-
-            if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 366) }
-            $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(114, 362)
-            $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(214, ($rightWidth - $btnBrowseGolden.Width - 10)), 360)
-        }
-
-        $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(170, ($btnBrowseGolden.Left - $ctrlCreate["GoldenParentVHD"].Left - 8))
-
         $grpConfig.Visible = $true
         $grpBoot.Visible = $true
         $grpOpts.Visible = $true
-        $grpSoft.Visible = $true
         $grpConfig.BringToFront()
         $grpBoot.BringToFront()
         $grpOpts.BringToFront()
-        $grpSoft.BringToFront()
 
-        $createBottom = [Math]::Max($grpConfig.Bottom, $grpSoft.Bottom)
+        $createBottom = [Math]::Max($grpConfig.Bottom, $grpBoot.Bottom, $grpOpts.Bottom)
         $fullInfoWidth = [Math]::Max(360, $createWidth - 12)
         $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point($tabPadding, $createBottom + 10)
         $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size($fullInfoWidth, 20)
@@ -3692,11 +3711,56 @@ function Update-TabLayouts {
         if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) { $ctrlGPU["GpuStatus"].BringToFront() }
 
         $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
+
+        # ----- Environment tab -----
+        $envWidth = [Math]::Max(680, $tabEnv.ClientSize.Width - (2 * $tabPadding))
+        $envHeaderBottom = if ($lblEnvHeader) { $lblEnvHeader.Bottom } else { 2 }
+        $envTop = [Math]::Max(18, ($envHeaderBottom + 8))
+
+        $grpSysInfo.Location = New-Object System.Drawing.Point($tabPadding, $envTop)
+        $grpSysInfo.Size = New-Object System.Drawing.Size([Math]::Max(580, [int]($envWidth * 0.45)), 200)
+
+        $grpGpuInfo.Location = New-Object System.Drawing.Point(($grpSysInfo.Right + $sectionGap), $envTop)
+        $grpGpuInfo.Size = New-Object System.Drawing.Size([Math]::Max(580, $envWidth - $grpSysInfo.Width - $sectionGap - $tabPadding), 200)
+
+        $grpSysInfo.Visible = $true
+        $grpGpuInfo.Visible = $true
+        $grpSysInfo.BringToFront()
+        $grpGpuInfo.BringToFront()
+
+        $grpSoft.Location = New-Object System.Drawing.Point($tabPadding, [Math]::Max($grpSysInfo.Bottom, $grpGpuInfo.Bottom) + $sectionGap)
+        $grpSoft.Size = New-Object System.Drawing.Size($envWidth - 2 * $tabPadding, 432)
+
+        $ctrlCreate["Parsec"].Location            = New-Object System.Drawing.Point(14, 28)
+        $ctrlCreate["VBCable"].Location           = New-Object System.Drawing.Point(14, 58)
+        $ctrlCreate["USBMMIDD"].Location          = New-Object System.Drawing.Point(14, 88)
+        $ctrlCreate["RDP"].Location               = New-Object System.Drawing.Point(14, 118)
+        $ctrlCreate["Share"].Location             = New-Object System.Drawing.Point(14, 148)
+        $ctrlCreate["PauseUpdate"].Location       = New-Object System.Drawing.Point(14, 178)
+        $ctrlCreate["FullUpdate"].Location        = New-Object System.Drawing.Point(14, 208)
+        $ctrlCreate["NestedVirt"].Location        = New-Object System.Drawing.Point(14, 238)
+        $ctrlCreate["NestedNetFollowup"].Location = New-Object System.Drawing.Point(14, 268)
+        $ctrlCreate["ResetBootOrder"].Location    = New-Object System.Drawing.Point(14, 298)
+        $ctrlCreate["GoldenImage"].Location       = New-Object System.Drawing.Point(14, 328)
+
+        $goldenLabel = $grpSoft.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq 'Parent VHDX:' } | Select-Object -First 1
+        if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 366) }
+        $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(114, 362)
+        $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(214, ($grpSoft.Width - $btnBrowseGolden.Width - 10)), 360)
+
+        $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(170, ($btnBrowseGolden.Left - $ctrlCreate["GoldenParentVHD"].Left - 8))
+
+        $grpSoft.Visible = $true
+        $grpSoft.BringToFront()
+
+        $envBottomMost = [Math]::Max($grpSysInfo.Bottom, $grpGpuInfo.Bottom, $grpSoft.Bottom)
+        $tabEnv.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($envBottomMost + 20))
     } catch {
         Write-UiWarning "Tab layout adjustment warning: $($_.Exception.Message)"
     } finally {
         $tabCreate.ResumeLayout($true)
         $tabGPU.ResumeLayout($true)
+        $tabEnv.ResumeLayout($true)
     }
 }
 

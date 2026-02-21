@@ -51,6 +51,7 @@ $script:ToolkitTagline = "Made with love"
 Write-Host ""
 Write-Host "  =============================================" -ForegroundColor Cyan
 Write-Host "   Hyper-V Toolkit | $script:ToolkitVersion | $script:ToolkitCreator" -ForegroundColor Cyan
+Write-Host "   $script:ToolkitTagline" -ForegroundColor DarkCyan
 Write-Host "  =============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -416,10 +417,10 @@ function Write-Log {
     }
 
     $color = switch ($Level) {
-        "ERROR" { [System.Drawing.Color]::Tomato }
-        "WARN"  { [System.Drawing.Color]::Gold }
-        "OK"    { [System.Drawing.Color]::LimeGreen }
-        default { [System.Drawing.Color]::White }
+        "ERROR" { $theme.Danger }
+        "WARN"  { $theme.Warning }
+        "OK"    { $theme.Success }
+        default { $theme.Text }
     }
     $script:LogBox.SelectionStart  = $script:LogBox.TextLength
     $script:LogBox.SelectionLength = 0
@@ -2563,33 +2564,120 @@ $script:FontConsolas   = New-Object System.Drawing.Font("Consolas", 9.5)
 # ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text              = "Hyper-V Toolkit - Version 1 - Diobyte - Made with love"
-$form.Size              = New-Object System.Drawing.Size(1420, 930)
-$form.MinimumSize       = New-Object System.Drawing.Size(1320, 860)
+$form.Size              = New-Object System.Drawing.Size(1450, 950)
+$form.MinimumSize       = New-Object System.Drawing.Size(1400, 950)
 $form.FormBorderStyle   = 'Sizable'
 $form.MaximizeBox       = $true
 $form.StartPosition     = "CenterScreen"
 $form.Font              = $script:FontMain
 $form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Dpi
-$form.BackColor         = [System.Drawing.Color]::FromArgb(24, 26, 31)
-$form.ForeColor         = [System.Drawing.Color]::White
+$form.BackColor         = $theme.Bg
+$form.ForeColor         = $theme.Text
 $form.Padding           = New-Object System.Windows.Forms.Padding(8)
 $form.KeyPreview        = $true
 
-# Theme palette
+# Menu Strip
+$menuStrip = New-Object System.Windows.Forms.MenuStrip
+$menuStrip.BackColor = $theme.Card
+$menuStrip.ForeColor = $theme.Text
+
+$fileMenu = New-Object System.Windows.Forms.ToolStripMenuItem
+$fileMenu.Text = "&File"
+$exitItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$exitItem.Text = "E&xit"
+$exitItem.ShortcutKeys = [System.Windows.Forms.Keys]::Alt -bor [System.Windows.Forms.Keys]::F4
+$exitItem.Add_Click({ $form.Close() })
+$fileMenu.DropDownItems.Add($exitItem)
+$menuStrip.Items.Add($fileMenu)
+
+$viewMenu = New-Object System.Windows.Forms.ToolStripMenuItem
+$viewMenu.Text = "&View"
+$clearLogItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$clearLogItem.Text = "&Clear Log"
+$clearLogItem.Add_Click({ $script:LogBox.Clear() })
+$viewMenu.DropDownItems.Add($clearLogItem)
+$menuStrip.Items.Add($viewMenu)
+
+$helpMenu = New-Object System.Windows.Forms.ToolStripMenuItem
+$helpMenu.Text = "&Help"
+$aboutItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$aboutItem.Text = "&About"
+$aboutItem.Add_Click({
+    [System.Windows.Forms.MessageBox]::Show(
+        "Hyper-V Toolkit v1`nCreated by Diobyte`nMade with love",
+        "About",
+        "OK",
+        "Information"
+    )
+})
+$helpMenu.DropDownItems.Add($aboutItem)
+$menuStrip.Items.Add($helpMenu)
+
+$form.MainMenuStrip = $menuStrip
+$form.Controls.Add($menuStrip)
+
+# Status Bar
+$statusStrip = New-Object System.Windows.Forms.StatusStrip
+$statusStrip.BackColor = $theme.Card
+$statusStrip.ForeColor = $theme.Text
+
+$statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+$statusLabel.Text = "Ready"
+$statusLabel.AutoSize = $true
+$statusStrip.Items.Add($statusLabel)
+
+$progressBar = New-Object System.Windows.Forms.ToolStripProgressBar
+$progressBar.Visible = $false
+$progressBar.Minimum = 0
+$progressBar.Maximum = 100
+$progressBar.Width = 200
+$statusStrip.Items.Add($progressBar)
+
+$script:StatusLabel = $statusLabel
+$script:StatusProgressBar = $progressBar
+
+function Update-StatusBar {
+    param([string]$Message = "Ready", [int]$Progress = -1)
+    
+    if ($script:StatusLabel) {
+        $script:StatusLabel.Text = $Message
+    }
+    
+    if ($script:StatusProgressBar) {
+        if ($Progress -ge 0) {
+            $script:StatusProgressBar.Visible = $true
+            $script:StatusProgressBar.Value = [Math]::Min(100, [Math]::Max(0, $Progress))
+        } else {
+            $script:StatusProgressBar.Visible = $false
+        }
+    }
+}
+
+$form.Controls.Add($statusStrip)
+
+# Theme palette - Modern dark theme with improved accessibility - Modern dark theme with improved accessibility
 $theme = @{
-    Bg          = [System.Drawing.Color]::FromArgb(24, 26, 31)
-    Card        = [System.Drawing.Color]::FromArgb(33, 37, 46)
-    Surface     = [System.Drawing.Color]::FromArgb(40, 44, 54)
-    Input       = [System.Drawing.Color]::FromArgb(31, 35, 43)
-    Border      = [System.Drawing.Color]::FromArgb(62, 68, 82)
-    Text        = [System.Drawing.Color]::FromArgb(239, 242, 248)
-    Muted       = [System.Drawing.Color]::FromArgb(166, 176, 195)
-    Accent      = [System.Drawing.Color]::FromArgb(59, 130, 246)
-    AccentHover = [System.Drawing.Color]::FromArgb(37, 99, 235)
-    Success     = [System.Drawing.Color]::FromArgb(22, 163, 74)
-    SuccessHover= [System.Drawing.Color]::FromArgb(21, 128, 61)
-    Danger      = [System.Drawing.Color]::FromArgb(185, 28, 28)
-    DangerHover = [System.Drawing.Color]::FromArgb(153, 27, 27)
+    Bg              = [System.Drawing.Color]::FromArgb(18, 20, 25)      # Darker background
+    Card            = [System.Drawing.Color]::FromArgb(30, 34, 43)      # Card background
+    Surface         = [System.Drawing.Color]::FromArgb(37, 41, 51)      # Surface for group boxes
+    Input           = [System.Drawing.Color]::FromArgb(45, 49, 59)      # Input field background
+    InputFocus      = [System.Drawing.Color]::FromArgb(55, 59, 69)      # Focused input
+    Border          = [System.Drawing.Color]::FromArgb(65, 71, 85)      # Borders
+    BorderFocus     = [System.Drawing.Color]::FromArgb(100, 106, 120)   # Focused borders
+    Text            = [System.Drawing.Color]::FromArgb(245, 248, 255)   # Primary text
+    TextSecondary   = [System.Drawing.Color]::FromArgb(180, 190, 210)   # Secondary text
+    TextMuted       = [System.Drawing.Color]::FromArgb(140, 150, 170)   # Muted text
+    Accent          = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Primary accent
+    AccentHover     = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Accent hover
+    AccentPressed   = [System.Drawing.Color]::FromArgb(25, 75, 200)     # Accent pressed
+    Success         = [System.Drawing.Color]::FromArgb(34, 197, 94)     # Success green
+    SuccessHover    = [System.Drawing.Color]::FromArgb(22, 163, 74)     # Success hover
+    Warning         = [System.Drawing.Color]::FromArgb(251, 191, 36)    # Warning yellow
+    WarningHover    = [System.Drawing.Color]::FromArgb(217, 119, 6)     # Warning hover
+    Danger          = [System.Drawing.Color]::FromArgb(239, 68, 68)     # Danger red
+    DangerHover     = [System.Drawing.Color]::FromArgb(185, 28, 28)     # Danger hover
+    Info            = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Info blue
+    InfoHover       = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Info hover
 }
 
 # ---- Tab Control ----
@@ -2605,18 +2693,26 @@ $tabControl.BackColor  = $theme.Card
 $tabControl.Margin     = New-Object System.Windows.Forms.Padding(8)
 $script:TabBrushSelected = New-Object System.Drawing.SolidBrush($theme.Accent)
 $script:TabBrushNormal   = New-Object System.Drawing.SolidBrush($theme.Surface)
+$script:TabBrushHover    = New-Object System.Drawing.SolidBrush($theme.Input)
 $tabControl.Add_DrawItem({
     param($tabCtrl, $e)
     if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabCtrl.TabPages.Count) { return }
 
     $isSelected = ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -eq [System.Windows.Forms.DrawItemState]::Selected
+    $isHot = ($e.State -band [System.Windows.Forms.DrawItemState]::HotLight) -eq [System.Windows.Forms.DrawItemState]::HotLight
     $tabPage = $tabCtrl.TabPages[$e.Index]
     $rect = $e.Bounds
 
-    $brush = if ($isSelected) { $script:TabBrushSelected } else { $script:TabBrushNormal }
-    $fg    = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
+    $brush = if ($isSelected) { $script:TabBrushSelected } elseif ($isHot) { $script:TabBrushHover } else { $script:TabBrushNormal }
+    $fg = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
 
     $e.Graphics.FillRectangle($brush, $rect)
+
+    # Draw border
+    $borderPen = New-Object System.Drawing.Pen($theme.Border, 1)
+    $e.Graphics.DrawRectangle($borderPen, $rect.X, $rect.Y, $rect.Width - 1, $rect.Height - 1)
+    $borderPen.Dispose()
+
     $tabText = if ([string]::IsNullOrWhiteSpace($tabPage.Text)) { " " } else { $tabPage.Text.Trim() }
     [System.Windows.Forms.TextRenderer]::DrawText(
         $e.Graphics,
@@ -2682,7 +2778,7 @@ function New-LabeledControl {
         "ComboBox"      { $c = New-Object System.Windows.Forms.ComboBox; $c.DropDownStyle = 'DropDownList'; $c }
         "NumericUpDown" { New-Object System.Windows.Forms.NumericUpDown }
         "CheckBox"      { New-Object System.Windows.Forms.CheckBox }
-        "Label"         { $l = New-Object System.Windows.Forms.Label; $l.ForeColor = [System.Drawing.Color]::Cyan; $l }
+        "Label"         { $l = New-Object System.Windows.Forms.Label; $l.ForeColor = $theme.Info; $l }
         default         { Write-Log "New-LabeledControl: unknown ControlType '$ControlType'" "WARN"; New-Object System.Windows.Forms.TextBox }
     }
     $ctrl.Location = New-Object System.Drawing.Point(($X + $effectiveLabelWidth), $Y)
@@ -2907,9 +3003,12 @@ $btnCreateVM.Text      = "Create VM"
 $btnCreateVM.Size      = New-Object System.Drawing.Size(140, 36)
 $btnCreateVM.Location  = New-Object System.Drawing.Point(642, 34)
 $btnCreateVM.FlatStyle = 'Flat'
-$btnCreateVM.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
+$btnCreateVM.BackColor = $theme.Accent
 $btnCreateVM.ForeColor = [System.Drawing.Color]::White
 $btnCreateVM.Font      = $script:FontBoldButton
+$btnCreateVM.FlatAppearance.BorderColor = $theme.AccentHover
+$btnCreateVM.FlatAppearance.MouseOverBackColor = $theme.AccentHover
+$btnCreateVM.FlatAppearance.MouseDownBackColor = $theme.AccentPressed
 $tabCreate.Controls.Add($btnCreateVM)
 
 # Create VM status + progress
@@ -2917,7 +3016,7 @@ $ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
 $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 34)
 $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 38)
-$ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Cyan
+$ctrlCreate["CreateStatus"].ForeColor = $theme.Info
 $ctrlCreate["CreateStatus"].AutoEllipsis = $true
 $ctrlCreate["CreateStatus"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
 $ctrlCreate["CreateStatus"].AutoSize = $false
@@ -3210,7 +3309,7 @@ $ctrlGPU["GpuAllocLabel"] = New-Object System.Windows.Forms.Label
 $ctrlGPU["GpuAllocLabel"].Text     = "100%"
 $ctrlGPU["GpuAllocLabel"].AutoSize = $true
 $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point(395, 158)
-$ctrlGPU["GpuAllocLabel"].ForeColor = [System.Drawing.Color]::Cyan
+$ctrlGPU["GpuAllocLabel"].ForeColor = $theme.Info
 $ctrlGPU["GpuAllocLabel"].Font = $script:FontBoldLabel
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuAllocLabel"])
 
@@ -3282,7 +3381,7 @@ $ctrlGPU["GpuStatus"] = New-Object System.Windows.Forms.Label
 $ctrlGPU["GpuStatus"].Text = ""
 $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size(500, 34)
 $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point(378, 514)
-$ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
+$ctrlGPU["GpuStatus"].ForeColor = $theme.Info
 $ctrlGPU["GpuStatus"].AutoEllipsis = $true
 $ctrlGPU["GpuStatus"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
 $ctrlGPU["GpuStatus"].AutoSize = $false
@@ -3405,8 +3504,8 @@ $script:LogBox           = New-Object System.Windows.Forms.RichTextBox
 $script:LogBox.Location  = New-Object System.Drawing.Point(10, 720)
 $script:LogBox.Size      = New-Object System.Drawing.Size(1200, 130)
 $script:LogBox.ReadOnly  = $true
-$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(17, 19, 24)
-$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(166, 243, 160)
+$script:LogBox.BackColor = $theme.Input
+$script:LogBox.ForeColor = $theme.Text
 $script:LogBox.Font      = $script:FontConsolas
 $script:LogBox.WordWrap  = $false
 $script:LogBox.ScrollBars = 'Both'
@@ -3964,6 +4063,15 @@ $toolTip.SetToolTip($btnClearLog, "Clear the on-screen log output.")
 $toolTip.SetToolTip($btnSaveLog, "Export the current log output to a file.")
 $toolTip.SetToolTip($btnExit, "Close the toolkit and run image mount cleanup.")
 
+# Environment tab tooltips
+$toolTip.SetToolTip($ctrlEnv["HostOS"], "Operating system version running on the host machine.")
+$toolTip.SetToolTip($ctrlEnv["HyperVStatus"], "Current status of Hyper-V feature installation.")
+$toolTip.SetToolTip($ctrlEnv["VMMSService"], "Status of the Hyper-V Virtual Machine Management Service.")
+$toolTip.SetToolTip($ctrlEnv["TotalRAM"], "Total physical RAM available on the host system.")
+$toolTip.SetToolTip($ctrlEnv["ProcessorCount"], "Number of logical processors available for VM allocation.")
+$toolTip.SetToolTip($ctrlEnv["GpuPEnabled"], "Whether GPU partitioning is supported on this host build.")
+$toolTip.SetToolTip($ctrlEnv["GpuCount"], "Number of physical GPUs detected in the system.")
+
 # Refresh VM list once tooltips are available so initial checkbox rows receive them.
 Update-VMList
 
@@ -4012,6 +4120,15 @@ $form.Add_KeyDown({
             $ctrlGPU["VmSearch"].Focus()
             $ctrlGPU["VmSearch"].SelectAll()
         }
+        $e.SuppressKeyPress = $true
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D1 -and $e.Control) {
+        $tabControl.SelectedIndex = 0  # Create VM tab
+        $e.SuppressKeyPress = $true
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D2 -and $e.Control) {
+        $tabControl.SelectedIndex = 1  # GPU Manager tab
+        $e.SuppressKeyPress = $true
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D3 -and $e.Control) {
+        $tabControl.SelectedIndex = 2  # Environment tab
         $e.SuppressKeyPress = $true
     }
 })
@@ -4304,7 +4421,7 @@ function Update-CreateValidationHint {
     $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross}) | $pwLabel $(if($passwordOk){$tick}else{$cross})"
 
     if ($isReady) {
-        $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::LimeGreen
+        $ctrlCreate["ValidationHint"].ForeColor = $theme.Success
     } elseif ($nameOk -or $sourceOk -or $networkOk -or $userOk -or $passwordOk) {
         $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::Gold
     } else {
@@ -4314,7 +4431,7 @@ function Update-CreateValidationHint {
     if ($ctrlCreate.ContainsKey("CreateStatus") -and $ctrlCreate["CreateStatus"] -and -not $script:IsCreating) {
         if ($isReady) {
             $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
-            $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::LimeGreen
+            $ctrlCreate["CreateStatus"].ForeColor = $theme.Success
         } else {
             $missing = @()
             if (-not $nameOk) { $missing += "VM name" }
@@ -4358,7 +4475,7 @@ function Update-GpuActionState {
             $ctrlGPU["SelectionHint"].ForeColor = [System.Drawing.Color]::Gold
         } else {
             $ctrlGPU["SelectionHint"].Text = "Ready: $selectedCount VM(s) selected for GPU update."
-            $ctrlGPU["SelectionHint"].ForeColor = [System.Drawing.Color]::LimeGreen
+            $ctrlGPU["SelectionHint"].ForeColor = $theme.Success
         }
     }
 
@@ -5669,7 +5786,7 @@ $btnUpdateGPU.Add_Click({
 
         if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
             $ctrlGPU["GpuStatus"].Text = "Running GPU update for $($selectedVMs.Count) VM(s)..."
-            $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
+            $ctrlGPU["GpuStatus"].ForeColor = $theme.Info
             $ctrlGPU["GpuStatus"].Refresh()
         }
 
@@ -5689,7 +5806,7 @@ $btnUpdateGPU.Add_Click({
                 Write-Log "Processing VM: $VMName"
                 if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
                     $ctrlGPU["GpuStatus"].Text = "[$VMName] Processing..."
-                    $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
+                    $ctrlGPU["GpuStatus"].ForeColor = $theme.Info
                     $ctrlGPU["GpuStatus"].Refresh()
                 }
 
@@ -5913,7 +6030,7 @@ $btnUpdateGPU.Add_Click({
                 Write-Log "[$VMName] Done." "OK"
                 if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
                     $ctrlGPU["GpuStatus"].Text = "[$VMName] Complete."
-                    $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::LimeGreen
+                    $ctrlGPU["GpuStatus"].ForeColor = $theme.Success
                     $ctrlGPU["GpuStatus"].Refresh()
                 }
 
@@ -6037,6 +6154,8 @@ try {
 } catch {
     Write-UiWarning "Initial layout warning: $($_.Exception.Message)"
 }
+
+Update-StatusBar -Message "Ready to create VMs"
 
 try {
     [void]$form.ShowDialog()

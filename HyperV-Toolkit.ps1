@@ -2041,33 +2041,42 @@ $tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windo
 function Update-MainLayout {
     param([System.Windows.Forms.Form]$RootForm)
 
-    if (-not $RootForm) { return }
+    if (-not $RootForm -or $RootForm.IsDisposed) { return }
+    if (-not $tabControl -or -not $script:LogBox -or -not $btnClearLog -or -not $btnSaveLog -or -not $btnExit) { return }
 
-    $margin = 10
-    $rightButtonColWidth = 85
-    $rightButtonGap = 10
-    $buttonStackGap = 35
+    try {
+        $margin = 10
+        $rightButtonColWidth = 85
+        $rightButtonGap = 10
+        $buttonStackGap = 35
 
-    $tabWidth = [Math]::Max(900, $RootForm.ClientSize.Width - 2 * $margin)
-    $tabHeight = [Math]::Max(550, [Math]::Min(620, $RootForm.ClientSize.Height - 260))
-    $tabControl.Location = New-Object System.Drawing.Point($margin, 8)
-    $tabControl.Size = New-Object System.Drawing.Size($tabWidth, $tabHeight)
+        $tabWidth = [Math]::Max(900, $RootForm.ClientSize.Width - 2 * $margin)
+        $tabHeight = [Math]::Max(550, [Math]::Min(620, $RootForm.ClientSize.Height - 260))
+        $tabControl.Location = New-Object System.Drawing.Point($margin, 8)
+        $tabControl.Size = New-Object System.Drawing.Size($tabWidth, $tabHeight)
 
-    $logY = $tabControl.Bottom + 12
-    $buttonX = [Math]::Max($margin + 600, $RootForm.ClientSize.Width - $rightButtonColWidth - $margin)
-    $logWidth = [Math]::Max(500, $buttonX - $margin - $rightButtonGap)
-    $logHeight = [Math]::Max(100, $RootForm.ClientSize.Height - $logY - $margin)
+        $logY = $tabControl.Bottom + 12
+        $buttonX = [Math]::Max($margin + 600, $RootForm.ClientSize.Width - $rightButtonColWidth - $margin)
+        $logWidth = [Math]::Max(500, $buttonX - $margin - $rightButtonGap)
+        $logHeight = [Math]::Max(100, $RootForm.ClientSize.Height - $logY - $margin)
 
-    $script:LogBox.Location = New-Object System.Drawing.Point($margin, $logY)
-    $script:LogBox.Size = New-Object System.Drawing.Size($logWidth, $logHeight)
+        $script:LogBox.Location = New-Object System.Drawing.Point($margin, $logY)
+        $script:LogBox.Size = New-Object System.Drawing.Size($logWidth, $logHeight)
 
-    $btnClearLog.Location = New-Object System.Drawing.Point($buttonX, $logY)
-    $btnSaveLog.Location = New-Object System.Drawing.Point($buttonX, ($logY + $buttonStackGap))
-    $btnExit.Location = New-Object System.Drawing.Point($buttonX, ($logY + 2 * $buttonStackGap))
+        $btnClearLog.Location = New-Object System.Drawing.Point($buttonX, $logY)
+        $btnSaveLog.Location = New-Object System.Drawing.Point($buttonX, ($logY + $buttonStackGap))
+        $btnExit.Location = New-Object System.Drawing.Point($buttonX, ($logY + 2 * $buttonStackGap))
+    } catch {
+        Write-Output "Layout adjustment warning: $($_.Exception.Message)"
+    }
 }
 
-$form.Add_Shown({ Update-MainLayout -RootForm $form })
-$form.Add_Resize({ Update-MainLayout -RootForm $form })
+$form.Add_Shown({
+    try { Update-MainLayout -RootForm $form } catch { Write-Output "Shown layout warning: $($_.Exception.Message)" }
+})
+$form.Add_Resize({
+    try { Update-MainLayout -RootForm $form } catch { Write-Output "Resize layout warning: $($_.Exception.Message)" }
+})
 
 # ---- Modern UI styling helpers ----
 function Set-ButtonHover {

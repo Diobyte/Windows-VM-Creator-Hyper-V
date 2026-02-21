@@ -4693,6 +4693,28 @@ $btnCreateVM.Add_Click({
         $effectiveDetectedBuild = if ($UseGoldenImage) { [int]$guestProfile.Build } else { [int]$script:DetectedBuild }
         $effectiveDetectedOsName = if ($UseGoldenImage) { $guestProfile.Name } else { $script:DetectedWinVersion }
 
+        if ([string]::IsNullOrWhiteSpace($VMLocBase)) { throw "VM Location is required." }
+        try {
+            $VMLocBase = [System.IO.Path]::GetFullPath($VMLocBase)
+        } catch {
+            throw "VM Location path is invalid: $($PSItem.Exception.Message)"
+        }
+
+        if (-not $UseGoldenImage -and -not [string]::IsNullOrWhiteSpace($ISOPath)) {
+            try {
+                $ISOPath = [System.IO.Path]::GetFullPath($ISOPath)
+            } catch {
+                Write-Log "ISO path normalization warning: $($_.Exception.Message)" "WARN"
+            }
+        }
+        if ($UseGoldenImage -and -not [string]::IsNullOrWhiteSpace($GoldenParentVHD)) {
+            try {
+                $GoldenParentVHD = [System.IO.Path]::GetFullPath($GoldenParentVHD)
+            } catch {
+                Write-Log "Golden parent path normalization warning: $($_.Exception.Message)" "WARN"
+            }
+        }
+
         if ($StrictLegacyMode) {
             if ($IsWin11) {
                 Write-Log "Strict Legacy Mode is ignored for Windows 11 compatibility requirements." "WARN"
@@ -4757,6 +4779,10 @@ $btnCreateVM.Add_Click({
         } else {
             if ([string]::IsNullOrWhiteSpace($GoldenParentVHD) -or -not (Test-Path $GoldenParentVHD)) {
                 throw "Golden Image mode is enabled. Please select a valid parent VHDX/VHD."
+            }
+            $goldenExt = [System.IO.Path]::GetExtension($GoldenParentVHD)
+            if ($goldenExt -notin @('.vhd', '.vhdx')) {
+                throw "Golden parent disk must be a .vhd or .vhdx file."
             }
         }
 
@@ -4931,7 +4957,7 @@ $btnCreateVM.Add_Click({
         $VHDPath = Join-Path $VMLoc "$VMName.vhdx"  # Set early so rollback always knows the VHD path
         if (Test-Path $VMLoc) { Write-Log "Directory $VMLoc already exists; files may be overwritten" "WARN" }
         else {
-            New-Item -Path $VMLoc -ItemType Directory -Force | Out-Null
+            New-Item -Path $VMLoc -ItemType Directory -Force -ErrorAction Stop | Out-Null
             $vmFolderCreatedByScript = $true
         }
         try {
@@ -5138,6 +5164,9 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 Write-Log "Creating dynamic VHDX ($DiskGB GB max)..."
                 New-VHD -Path $VHDPath -SizeBytes ($DiskGB * 1GB) -Dynamic -ErrorAction Stop | Out-Null
             }
+            if (-not (Test-Path $VHDPath)) {
+                throw "VHD creation command completed but disk file was not found at '$VHDPath'."
+            }
 
         # ---- Mount VHD and partition ----
             Update-CreateProgress -Percent 38 -Status "Partitioning virtual disk..."
@@ -5261,7 +5290,9 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 $efiRefreshed = Get-Partition -DiskNumber $diskNumber |
                     Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } |
                     Select-Object -First 1
-            } catch { }
+            } catch {
+                Write-Log "Could not refresh EFI partition metadata: $($_.Exception.Message)" "WARN"
+            }
             if ($efiRefreshed -and $efiRefreshed.DriveLetter -and $efiRefreshed.DriveLetter -ne [char]0) {
                 $candidateDrive = "$($efiRefreshed.DriveLetter):"
                 if (Test-Path "$candidateDrive\") {
@@ -5311,6 +5342,8 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
             # Method 4: diskpart — most reliable for ESP partitions on all Windows versions
             if (-not $accessPathWorked) {
+                $diskpartExe = Join-Path $env:WINDIR 'System32\diskpart.exe'
+                if (-not (Test-Path $diskpartExe)) { $diskpartExe = 'diskpart.exe' }
                 $dpScript = @"
 select disk $diskNumber
 select partition $($targetPart.PartitionNumber)
@@ -5319,7 +5352,7 @@ assign letter=$freeLetter
                 $dpFile = Join-Path $env:TEMP "ht_efi_$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
                 try {
                     $dpScript | Out-File -FilePath $dpFile -Encoding ASCII -Force
-                    $dpResult = & diskpart /s $dpFile 2>&1
+                    $dpResult = & $diskpartExe /s $dpFile 2>&1
                     $dpExitCode = $LASTEXITCODE
                     Remove-Item $dpFile -Force -ErrorAction SilentlyContinue
                     if ($dpExitCode -eq 0) {
@@ -5375,11 +5408,13 @@ assign letter=$freeLetter
 
         # Attempt 2: Use host's bcdboot
         if (-not $bootSuccess) {
+            $hostBcdboot = Join-Path $env:WINDIR 'System32\bcdboot.exe'
+            if (-not (Test-Path $hostBcdboot)) { $hostBcdboot = 'bcdboot.exe' }
             for ($retry = 1; $retry -le 3; $retry++) {
                 try {
                     Write-Log "Boot attempt $retry/3: Using host bcdboot..."
                     Start-Sleep -Seconds 2
-                    $result = & bcdboot "$driveLetter\Windows" /s $efiDrive /f UEFI 2>&1
+                    $result = & $hostBcdboot "$driveLetter\Windows" /s $efiDrive /f UEFI 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         Write-Log "Boot files created successfully (host bcdboot)" "OK"
                         $bootSuccess = $true
@@ -5395,11 +5430,13 @@ assign letter=$freeLetter
 
         # Attempt 3: Host bcdboot with /f ALL for broader compatibility
         if (-not $bootSuccess) {
+            $hostBcdboot = Join-Path $env:WINDIR 'System32\bcdboot.exe'
+            if (-not (Test-Path $hostBcdboot)) { $hostBcdboot = 'bcdboot.exe' }
             for ($retry = 1; $retry -le 2; $retry++) {
                 try {
                     Write-Log "Boot attempt $retry/2: Using host bcdboot with /f ALL fallback..."
                     Start-Sleep -Seconds 2
-                    $result = & bcdboot "$driveLetter\Windows" /s $efiDrive /f ALL 2>&1
+                    $result = & $hostBcdboot "$driveLetter\Windows" /s $efiDrive /f ALL 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         Write-Log "Boot files created successfully (host bcdboot /f ALL)" "OK"
                         $bootSuccess = $true
@@ -5484,7 +5521,9 @@ assign letter=$freeLetter
                     }
                     # Re-run bcdboot to create the BCD store referencing these files
                     Start-Sleep -Seconds 1
-                    $result = & bcdboot "$driveLetter\Windows" /s $efiDrive /f UEFI 2>&1
+                    $hostBcdboot = Join-Path $env:WINDIR 'System32\bcdboot.exe'
+                    if (-not (Test-Path $hostBcdboot)) { $hostBcdboot = 'bcdboot.exe' }
+                    $result = & $hostBcdboot "$driveLetter\Windows" /s $efiDrive /f UEFI 2>&1
                     if ($LASTEXITCODE -eq 0 -and (Test-Path $bcdStore)) {
                         Write-Log "BCD store created after manual boot file copy." "OK"
                         $bootSuccess = $true
@@ -5504,7 +5543,9 @@ assign letter=$freeLetter
             try {
                 $cleanupPart = if ($efiRefreshed) { $efiRefreshed } else { $efi }
                 $cleanupPart | Remove-PartitionAccessPath -AccessPath $efiDrive -ErrorAction SilentlyContinue
-            } catch { }
+            } catch {
+                Write-Log "EFI access-path cleanup failed for ${efiDrive}: $($_.Exception.Message)" "WARN"
+            }
         }
 
         # ---- Configure Windows Recovery Environment ----
@@ -5669,6 +5710,9 @@ assign letter=$freeLetter
         Update-CreateProgress -Percent 88 -Status "Creating Hyper-V VM..."
         Write-Log "Creating Generation 2 Hyper-V VM..."
         New-VM -Name $VMName -MemoryStartupBytes ($MemGB * 1GB) -Generation 2 -VHDPath $VHDPath -Path $VMLoc -SwitchName $VMSwitch -ErrorAction Stop | Out-Null
+        if (-not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
+            throw "Hyper-V did not report VM '$VMName' after New-VM completed."
+        }
 
         # Processor
         Set-VM -Name $VMName -ProcessorCount $vCPU -ErrorAction Stop
@@ -5821,7 +5865,9 @@ assign letter=$freeLetter
         # Open vmconnect only when VM starts
         if ($vmStarted) {
             try {
-                vmconnect.exe localhost $VMName
+                $vmconnectExe = Join-Path $env:WINDIR 'System32\vmconnect.exe'
+                if (-not (Test-Path $vmconnectExe)) { $vmconnectExe = 'vmconnect.exe' }
+                & $vmconnectExe localhost $VMName
             } catch {
                 Write-Log "vmconnect launch failed for '$VMName': $($_.Exception.Message)" "WARN"
             }
@@ -6338,7 +6384,8 @@ $btnUpdateGPU.Add_Click({
 
 # ---- Form Closing Cleanup ----
 $form.Add_FormClosing({
-    param($sender, $e)
+    param($formSender, $e)
+    [void]$formSender
     # Warn if a long-running operation is still in progress
     if ($script:IsCreating -or $script:IsUpdatingGPU) {
         $closeConfirm = [System.Windows.Forms.MessageBox]::Show(

@@ -2424,23 +2424,20 @@ function Update-TabLayouts {
             }
         }
 
-        $minLeftColumnWidth = 520
-        $calculatedRightColumnWidth = [Math]::Max(420, ($maxCheckboxPreferredWidth + 120))
-        $minRightColumnWidth = [Math]::Min(560, $calculatedRightColumnWidth)
-        $canUseTwoMainColumns = ($createWidth -ge ($minLeftColumnWidth + $sectionGap + $minRightColumnWidth + 4))
-
-        # Keep Create tab in side-by-side mode at normal desktop widths so
-        # runtime options stay visible and do not drop under VM configuration.
-        if ($createWidth -ge 980) {
-            $canUseTwoMainColumns = $true
-        }
-        $singleCreateColumn = (-not $canUseTwoMainColumns)
+        # Adaptive layout (monitor and DPI agnostic):
+        # - Use two columns when both columns can fit safely.
+        # - Fall back to one column when width is too narrow, relying on tab scroll.
+        $minLeftColumnWidth = 470
+        $minRightColumnWidth = [Math]::Max(420, ($maxCheckboxPreferredWidth + 140))
+        $canUseTwoColumns = ($createWidth -ge ($minLeftColumnWidth + $sectionGap + $minRightColumnWidth + 4))
+        $singleCreateColumn = (-not $canUseTwoColumns)
 
         if ($singleCreateColumn) {
             $leftWidth = $createWidth - 4
             $rightWidth = $createWidth - 4
         } else {
-            $leftWidth = [Math]::Max($minLeftColumnWidth, [Math]::Min([int]($createWidth * 0.50), ($createWidth - $sectionGap - $minRightColumnWidth - 4)))
+            $leftTargetPercent = 0.50
+            $leftWidth = [Math]::Max($minLeftColumnWidth, [Math]::Min([int]($createWidth * $leftTargetPercent), ($createWidth - $sectionGap - $minRightColumnWidth - 4)))
             $rightWidth = [Math]::Max($minRightColumnWidth, ($createWidth - $leftWidth - $sectionGap - 4))
         }
         $rightX = if ($singleCreateColumn) { $tabPadding } else { $tabPadding + $leftWidth + $sectionGap }
@@ -2467,12 +2464,14 @@ function Update-TabLayouts {
         $grpOpts.Location = New-Object System.Drawing.Point($rightX, $grpBoot.Bottom + $sectionGap)
 
         $optsLeftKeys = @("DynamicMem","EnhancedSession","StartVM","StrictLegacyMode")
+        $optsRightKeys = @("AutoCreateSwitch","EnableMetering","EnableAutoLogon")
         $optsLeftRight = ($optsLeftKeys | ForEach-Object { $ctrlCreate[$_].Right } | Measure-Object -Maximum).Maximum
-        $optsRightStart = [Math]::Max([int]($rightWidth * 0.55), ($optsLeftRight + 18))
-        $optsCanTwoCol = ($rightWidth -ge 500 -and $optsRightStart -le ($rightWidth - 170))
+        $optsRightPreferred = ($optsRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum
+        $optsRightStart = [Math]::Max([int]($rightWidth * 0.50), ($optsLeftRight + 18))
+        $optsCanTwoCol = (($optsRightStart + $optsRightPreferred + 24) -le $rightWidth)
 
         if ($optsCanTwoCol) {
-            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 165)
+            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 178)
 
             $ctrlCreate["DynamicMem"].Location       = New-Object System.Drawing.Point(14, 28)
             $ctrlCreate["EnhancedSession"].Location  = New-Object System.Drawing.Point(14, 58)
@@ -2482,7 +2481,7 @@ function Update-TabLayouts {
             $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($optsRightStart, 28)
             $ctrlCreate["EnableMetering"].Location   = New-Object System.Drawing.Point($optsRightStart, 58)
             $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point($optsRightStart, 88)
-            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 124)
+            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 132)
         } else {
             $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 278)
 
@@ -2495,14 +2494,16 @@ function Update-TabLayouts {
             $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point(14, 208)
             $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 236)
         }
-        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 36)
+        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 40)
 
         $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
 
         $softLeftKeys = @("Parsec","USBMMIDD","Share","FullUpdate","NestedNetFollowup","GoldenImage")
+        $softRightKeys = @("VBCable","RDP","PauseUpdate","NestedVirt","ResetBootOrder")
         $softLeftRight = ($softLeftKeys | ForEach-Object { $ctrlCreate[$_].Right } | Measure-Object -Maximum).Maximum
-        $softRightStart = [Math]::Max([int]($rightWidth * 0.55), ($softLeftRight + 18))
-        $softCanTwoCol = ($rightWidth -ge 500 -and $softRightStart -le ($rightWidth - 170))
+        $softRightPreferred = ($softRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum
+        $softRightStart = [Math]::Max([int]($rightWidth * 0.50), ($softLeftRight + 18))
+        $softCanTwoCol = (($softRightStart + $softRightPreferred + 24) -le $rightWidth)
 
         $goldenLabel = $grpSoft.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq 'Parent VHDX:' } | Select-Object -First 1
 
@@ -2566,6 +2567,13 @@ function Update-TabLayouts {
         $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($createInfoWidth, 18)
         $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($statusY + 20))
         $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size($createInfoWidth, 14)
+
+        # Ensure all create-tab content remains reachable when DPI/font scaling changes.
+        $createBottomMost = [Math]::Max(
+            [Math]::Max($ctrlCreate["ModeHint"].Bottom, $btnCreateVM.Bottom),
+            $ctrlCreate["CreateProgress"].Bottom
+        )
+        $tabCreate.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($createBottomMost + 20))
 
         # ----- GPU tab -----
         $gpuWidth = [Math]::Max(680, $tabGPU.ClientSize.Width - (2 * $tabPadding))
@@ -2977,6 +2985,17 @@ function Update-CreateValidationHint {
     }
 }
 
+function Update-DynamicMemoryUi {
+    if (-not $ctrlCreate.ContainsKey("DynamicMem") -or -not $ctrlCreate["DynamicMem"]) { return }
+
+    $enabled = [bool]$ctrlCreate["DynamicMem"].Checked
+    foreach ($key in @("DynamicMemMin", "DynamicMemMax")) {
+        if ($ctrlCreate.ContainsKey($key) -and $ctrlCreate[$key]) {
+            $ctrlCreate[$key].Enabled = $enabled
+        }
+    }
+}
+
 $ctrlCreate["GoldenImage"].Add_CheckedChanged({
     Update-CreateModeUi
     Update-CreateValidationHint
@@ -2985,6 +3004,7 @@ $ctrlCreate["GoldenImage"].Add_CheckedChanged({
 Update-CreateModeUi
 Update-RoutingHint
 Update-CreateValidationHint
+Update-DynamicMemoryUi
 
 # Keep NAT/routing-related checkboxes in a valid state
 $ctrlCreate["AutoCreateSwitch"].Add_CheckedChanged({
@@ -2997,6 +3017,10 @@ $ctrlCreate["AutoCreateSwitch"].Add_CheckedChanged({
     }
     Update-RoutingHint
     Update-CreateValidationHint
+})
+
+$ctrlCreate["DynamicMem"].Add_CheckedChanged({
+    Update-DynamicMemoryUi
 })
 
 $ctrlCreate["NestedVirt"].Add_CheckedChanged({
@@ -3075,6 +3099,7 @@ $btnCreateVM.Add_Click({
         $ISOPath         = $ctrlCreate["ISOPath"].Text.Trim()
         $Username        = $ctrlCreate["Username"].Text.Trim()
         $PasswordText    = $ctrlCreate["Password"].Text
+        $SelectedResolution = [string]$ctrlCreate["Resolution"].SelectedItem
         $Password        = $null
         $vCPU            = [int]$ctrlCreate["vCPU"].Value
         $MemGB           = [int]$ctrlCreate["Memory"].Value
@@ -3330,6 +3355,17 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             'echo [%date% %time%] Starting SetupComplete.cmd >> %LOGFILE%'
             ''
         )
+
+        if ($SelectedResolution -match '^(\d+)x(\d+)$') {
+            $resX = $matches[1]
+            $resY = $matches[2]
+            $lines += @(
+                ':: --- Set display resolution ---'
+                'echo [%date% %time%] Setting display resolution... >> %LOGFILE%'
+                ('if exist "%WORKDIR%\QRes.exe" start /wait "" "%WORKDIR%\QRes.exe" /x:{0} /y:{1}' -f $resX, $resY)
+                ''
+            )
+        }
 
         if ($ctrlCreate["Parsec"].Checked) {
             $lines += @(

@@ -2554,7 +2554,7 @@ Write-Host "  [7/7] Building interface..." -ForegroundColor DarkGray
 
 # ---- Shared Font Cache (disposed on close) ----
 $script:FontMain       = New-Object System.Drawing.Font("Segoe UI", 9.75)
-$script:FontTabHeader  = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
+$script:FontTabHeader  = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $script:FontHeader     = New-Object System.Drawing.Font("Segoe UI", 8.75)
 $script:FontBoldButton = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $script:FontSmall      = New-Object System.Drawing.Font("Segoe UI", 8)
@@ -2564,22 +2564,22 @@ $script:FontConsolas   = New-Object System.Drawing.Font("Consolas", 9.5)
 # ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text              = "Hyper-V Toolkit - Version 1 - Diobyte - Made with love"
-$form.Size              = New-Object System.Drawing.Size(1450, 950)
-$form.MinimumSize       = New-Object System.Drawing.Size(1400, 950)
+$form.Size              = New-Object System.Drawing.Size(1200, 800)
+$form.MinimumSize       = New-Object System.Drawing.Size(1100, 750)
 $form.FormBorderStyle   = 'Sizable'
 $form.MaximizeBox       = $true
 $form.StartPosition     = "CenterScreen"
 $form.Font              = $script:FontMain
-$form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Dpi
-$form.BackColor         = $theme.Bg
-$form.ForeColor         = $theme.Text
+$form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Font
+# $form.BackColor         = $theme.Bg
+# $form.ForeColor         = $theme.Text
 $form.Padding           = New-Object System.Windows.Forms.Padding(8)
 $form.KeyPreview        = $true
 
 # Menu Strip
 $menuStrip = New-Object System.Windows.Forms.MenuStrip
-$menuStrip.BackColor = $theme.Card
-$menuStrip.ForeColor = $theme.Text
+# $menuStrip.BackColor = $theme.Card
+# $menuStrip.ForeColor = $theme.Text
 
 $fileMenu = New-Object System.Windows.Forms.ToolStripMenuItem
 $fileMenu.Text = "&File"
@@ -2618,8 +2618,8 @@ $form.Controls.Add($menuStrip)
 
 # Status Bar
 $statusStrip = New-Object System.Windows.Forms.StatusStrip
-$statusStrip.BackColor = $theme.Card
-$statusStrip.ForeColor = $theme.Text
+# $statusStrip.BackColor = $theme.Card
+# $statusStrip.ForeColor = $theme.Text
 
 $statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
 $statusLabel.Text = "Ready"
@@ -2656,72 +2656,114 @@ function Update-StatusBar {
 $form.Controls.Add($statusStrip)
 
 # Theme palette - Modern dark theme with improved accessibility - Modern dark theme with improved accessibility
-$theme = @{
-    Bg              = [System.Drawing.Color]::FromArgb(18, 20, 25)      # Darker background
-    Card            = [System.Drawing.Color]::FromArgb(30, 34, 43)      # Card background
-    Surface         = [System.Drawing.Color]::FromArgb(37, 41, 51)      # Surface for group boxes
-    Input           = [System.Drawing.Color]::FromArgb(45, 49, 59)      # Input field background
-    InputFocus      = [System.Drawing.Color]::FromArgb(55, 59, 69)      # Focused input
-    Border          = [System.Drawing.Color]::FromArgb(65, 71, 85)      # Borders
-    BorderFocus     = [System.Drawing.Color]::FromArgb(100, 106, 120)   # Focused borders
-    Text            = [System.Drawing.Color]::FromArgb(245, 248, 255)   # Primary text
-    TextSecondary   = [System.Drawing.Color]::FromArgb(180, 190, 210)   # Secondary text
-    TextMuted       = [System.Drawing.Color]::FromArgb(140, 150, 170)   # Muted text
-    Accent          = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Primary accent
-    AccentHover     = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Accent hover
-    AccentPressed   = [System.Drawing.Color]::FromArgb(25, 75, 200)     # Accent pressed
-    Success         = [System.Drawing.Color]::FromArgb(34, 197, 94)     # Success green
-    SuccessHover    = [System.Drawing.Color]::FromArgb(22, 163, 74)     # Success hover
-    Warning         = [System.Drawing.Color]::FromArgb(251, 191, 36)    # Warning yellow
-    WarningHover    = [System.Drawing.Color]::FromArgb(217, 119, 6)     # Warning hover
-    Danger          = [System.Drawing.Color]::FromArgb(239, 68, 68)     # Danger red
-    DangerHover     = [System.Drawing.Color]::FromArgb(185, 28, 28)     # Danger hover
-    Info            = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Info blue
-    InfoHover       = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Info hover
+try {
+    $theme = @{
+        Bg              = [System.Drawing.Color]::FromArgb(18, 20, 25)      # Darker background
+        Card            = [System.Drawing.Color]::FromArgb(30, 34, 43)      # Card background
+        Surface         = [System.Drawing.Color]::FromArgb(37, 41, 51)      # Surface for group boxes
+        Input           = [System.Drawing.Color]::FromArgb(45, 49, 59)      # Input field background
+        InputFocus      = [System.Drawing.Color]::FromArgb(55, 59, 69)      # Focused input
+        Border          = [System.Drawing.Color]::FromArgb(65, 71, 85)      # Borders
+        BorderFocus     = [System.Drawing.Color]::FromArgb(100, 106, 120)   # Focused borders
+        Text            = [System.Drawing.Color]::FromArgb(245, 248, 255)   # Primary text
+        TextSecondary   = [System.Drawing.Color]::FromArgb(180, 190, 210)   # Secondary text
+        TextMuted       = [System.Drawing.Color]::FromArgb(140, 150, 170)   # Muted text
+        Accent          = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Primary accent
+        AccentHover     = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Accent hover
+        AccentPressed   = [System.Drawing.Color]::FromArgb(25, 75, 200)     # Accent pressed
+        Success         = [System.Drawing.Color]::FromArgb(34, 197, 94)     # Success green
+        SuccessHover    = [System.Drawing.Color]::FromArgb(22, 163, 74)     # Success hover
+        Warning         = [System.Drawing.Color]::FromArgb(251, 191, 36)    # Warning yellow
+        WarningHover    = [System.Drawing.Color]::FromArgb(217, 119, 6)     # Warning hover
+        Danger          = [System.Drawing.Color]::FromArgb(239, 68, 68)     # Danger red
+        DangerHover     = [System.Drawing.Color]::FromArgb(185, 28, 28)     # Danger hover
+        Info            = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Info blue
+        InfoHover       = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Info hover
+    }
+    Write-StartupTrace -Message "Theme created successfully"
+} catch {
+    Write-StartupTrace -Message "Theme creation failed: $($_.Exception.Message)" -Level 'ERROR'
+    # Fallback to system colors
+    $theme = @{
+        Bg              = [System.Drawing.SystemColors]::ControlDarkDark
+        Card            = [System.Drawing.SystemColors]::Control
+        Surface         = [System.Drawing.SystemColors]::Control
+        Input           = [System.Drawing.SystemColors]::Window
+        InputFocus      = [System.Drawing.SystemColors]::Window
+        Border          = [System.Drawing.SystemColors]::ControlDark
+        BorderFocus     = [System.Drawing.SystemColors]::ControlDark
+        Text            = [System.Drawing.SystemColors]::ControlText
+        TextSecondary   = [System.Drawing.SystemColors]::ControlText
+        TextMuted       = [System.Drawing.SystemColors]::GrayText
+        Accent          = [System.Drawing.SystemColors]::Highlight
+        AccentHover     = [System.Drawing.SystemColors]::Highlight
+        AccentPressed   = [System.Drawing.SystemColors]::Highlight
+        Success         = [System.Drawing.Color]::Green
+        SuccessHover    = [System.Drawing.Color]::Green
+        Warning         = [System.Drawing.Color]::Orange
+        WarningHover    = [System.Drawing.Color]::Orange
+        Danger          = [System.Drawing.Color]::Red
+        DangerHover     = [System.Drawing.Color]::Red
+        Info            = [System.Drawing.Color]::Blue
+        InfoHover       = [System.Drawing.Color]::Blue
+    }
 }
 
 # ---- Tab Control ----
 $tabControl            = New-Object System.Windows.Forms.TabControl
 $tabControl.Location   = New-Object System.Drawing.Point(10, 8)
-$tabControl.Size       = New-Object System.Drawing.Size(1310, 700)
+$tabControl.Size       = New-Object System.Drawing.Size(1100, 600)
 $tabControl.Font       = $script:FontTabHeader
 $tabControl.DrawMode   = [System.Windows.Forms.TabDrawMode]::OwnerDrawFixed
 $tabControl.ItemSize   = New-Object System.Drawing.Size(150, 32)
 $tabControl.SizeMode   = [System.Windows.Forms.TabSizeMode]::Fixed
 $tabControl.Padding    = New-Object System.Drawing.Point(14, 4)
-$tabControl.BackColor  = $theme.Card
+# $tabControl.BackColor  = $theme.Card
 $tabControl.Margin     = New-Object System.Windows.Forms.Padding(8)
-$script:TabBrushSelected = New-Object System.Drawing.SolidBrush($theme.Accent)
-$script:TabBrushNormal   = New-Object System.Drawing.SolidBrush($theme.Surface)
-$script:TabBrushHover    = New-Object System.Drawing.SolidBrush($theme.Input)
+try {
+    $script:TabBrushSelected = New-Object System.Drawing.SolidBrush($theme.Accent)
+    $script:TabBrushNormal   = New-Object System.Drawing.SolidBrush($theme.Surface)
+    $script:TabBrushHover    = New-Object System.Drawing.SolidBrush($theme.Input)
+    Write-StartupTrace -Message "Tab brushes created successfully"
+} catch {
+    Write-StartupTrace -Message "Tab brush creation failed: $($_.Exception.Message)" -Level 'ERROR'
+    # Fallback brushes
+    $script:TabBrushSelected = New-Object System.Drawing.SolidBrush([System.Drawing.SystemColors]::Highlight)
+    $script:TabBrushNormal   = New-Object System.Drawing.SolidBrush([System.Drawing.SystemColors]::Control)
+    $script:TabBrushHover    = New-Object System.Drawing.SolidBrush([System.Drawing.SystemColors]::ControlLight)
+}
 $tabControl.Add_DrawItem({
     param($tabCtrl, $e)
-    if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabCtrl.TabPages.Count) { return }
+    try {
+        if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabCtrl.TabPages.Count) { return }
 
-    $isSelected = ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -eq [System.Windows.Forms.DrawItemState]::Selected
-    $isHot = ($e.State -band [System.Windows.Forms.DrawItemState]::HotLight) -eq [System.Windows.Forms.DrawItemState]::HotLight
-    $tabPage = $tabCtrl.TabPages[$e.Index]
-    $rect = $e.Bounds
+        $isSelected = ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -eq [System.Windows.Forms.DrawItemState]::Selected
+        $isHot = ($e.State -band [System.Windows.Forms.DrawItemState]::HotLight) -eq [System.Windows.Forms.DrawItemState]::HotLight
+        $tabPage = $tabCtrl.TabPages[$e.Index]
+        $rect = $e.Bounds
 
-    $brush = if ($isSelected) { $script:TabBrushSelected } elseif ($isHot) { $script:TabBrushHover } else { $script:TabBrushNormal }
-    $fg = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
+        $brush = if ($isSelected) { $script:TabBrushSelected } elseif ($isHot) { $script:TabBrushHover } else { $script:TabBrushNormal }
+        $fg = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
 
-    $e.Graphics.FillRectangle($brush, $rect)
+        $e.Graphics.FillRectangle($brush, $rect)
 
-    # Draw border
-    $borderPen = New-Object System.Drawing.Pen($theme.Border, 1)
-    $e.Graphics.DrawRectangle($borderPen, $rect.X, $rect.Y, $rect.Width - 1, $rect.Height - 1)
-    $borderPen.Dispose()
+        # Draw border
+        $borderPen = New-Object System.Drawing.Pen($theme.Border, 1)
+        $e.Graphics.DrawRectangle($borderPen, $rect.X, $rect.Y, $rect.Width - 1, $rect.Height - 1)
+        $borderPen.Dispose()
 
-    $tabText = if ([string]::IsNullOrWhiteSpace($tabPage.Text)) { " " } else { $tabPage.Text.Trim() }
-    [System.Windows.Forms.TextRenderer]::DrawText(
-        $e.Graphics,
-        $tabText,
-        $tabCtrl.Font,
-        $rect,
-        $fg,
-        [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
-    )
+        $tabText = if ([string]::IsNullOrWhiteSpace($tabPage.Text)) { " " } else { $tabPage.Text.Trim() }
+        [System.Windows.Forms.TextRenderer]::DrawText(
+            $e.Graphics,
+            $tabText,
+            $tabCtrl.Font,
+            $rect,
+            $fg,
+            [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
+        )
+    } catch {
+        Write-StartupTrace -Message "Tab drawing error: $($_.Exception.Message)" -Level 'ERROR'
+    }
 })
 $form.Controls.Add($tabControl)
 
@@ -2730,8 +2772,8 @@ $form.Controls.Add($tabControl)
 # ============================================================
 $tabCreate             = New-Object System.Windows.Forms.TabPage
 $tabCreate.Text        = "  Create VM  "
-$tabCreate.BackColor   = $theme.Card
-$tabCreate.ForeColor   = $theme.Text
+# $tabCreate.BackColor   = $theme.Card
+# $tabCreate.ForeColor   = $theme.Text
 $tabCreate.AutoScroll  = $true
 $tabCreate.Padding     = New-Object System.Windows.Forms.Padding(8)
 
@@ -3036,8 +3078,8 @@ $tabCreate.Controls.Add($ctrlCreate["CreateProgress"])
 # ============================================================
 $tabGPU             = New-Object System.Windows.Forms.TabPage
 $tabGPU.Text        = "  GPU Manager  "
-$tabGPU.BackColor   = $theme.Card
-$tabGPU.ForeColor   = $theme.Text
+# $tabGPU.BackColor   = $theme.Card
+# $tabGPU.ForeColor   = $theme.Text
 $tabGPU.AutoScroll  = $true
 $tabGPU.Padding     = New-Object System.Windows.Forms.Padding(8)
 $tabControl.TabPages.Add($tabGPU)
@@ -3392,8 +3434,8 @@ $tabGPU.Controls.Add($ctrlGPU["GpuStatus"])
 # ============================================================
 $tabEnv             = New-Object System.Windows.Forms.TabPage
 $tabEnv.Text        = "  Environment  "
-$tabEnv.BackColor   = $theme.Card
-$tabEnv.ForeColor   = $theme.Text
+# $tabEnv.BackColor   = $theme.Card
+# $tabEnv.ForeColor   = $theme.Text
 $tabEnv.AutoScroll  = $true
 $tabEnv.Padding     = New-Object System.Windows.Forms.Padding(8)
 $tabControl.TabPages.Add($tabEnv)
@@ -3925,7 +3967,7 @@ function Set-ButtonHover {
 }
 
 # Pre-create shared font objects for theming to avoid per-control allocation leaks
-$script:ThemeFontGroupBox = New-Object System.Drawing.Font("Segoe UI Semibold", 9.5)
+$script:ThemeFontGroupBox = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 
 function Set-ModernTheme {
     param([System.Windows.Forms.Control]$Root)

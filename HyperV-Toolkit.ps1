@@ -666,25 +666,6 @@ function Convert-PlainTextToSecureString {
     return $secure
 }
 
-function Test-StrongPassword {
-    param([AllowNull()][string]$Value)
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $false
-    }
-
-    if ($Value.Length -lt 12) {
-        return $false
-    }
-
-    $hasUpper = $Value -cmatch '[A-Z]'
-    $hasLower = $Value -cmatch '[a-z]'
-    $hasDigit = $Value -match '\d'
-    $hasSpecial = $Value -match '[^a-zA-Z0-9]'
-
-    return ($hasUpper -and $hasLower -and $hasDigit -and $hasSpecial)
-}
-
 function Update-CreateProgress {
     param(
         [int]$Percent,
@@ -1160,6 +1141,7 @@ function New-UnattendXml {
         [string]$VMName,
         [string]$Username,
         [AllowNull()][System.Security.SecureString]$Password,
+        [bool]$EnableAutoLogon = $true,
         [bool]$IsWindows11 = $false
     )
 
@@ -1208,6 +1190,21 @@ function New-UnattendXml {
     </component>
 "@
     }
+
+        $autoLogonBlock = ""
+        if ($EnableAutoLogon) {
+                $autoLogonBlock = @"
+            <AutoLogon>
+                                <Username>$xmlUsername</Username>
+                <Enabled>true</Enabled>
+                <LogonCount>3</LogonCount>
+                <Password>
+                                        <Value>$xmlPasswordB64</Value>
+                    <PlainText>false</PlainText>
+                </Password>
+            </AutoLogon>
+"@
+        }
 
     return @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -1263,6 +1260,7 @@ $bypassBlock
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
+$autoLogonBlock
       <OOBE>
         <ProtectYourPC>3</ProtectYourPC>
         <HideEULAPage>true</HideEULAPage>
@@ -1922,7 +1920,8 @@ $chkNames = @(
     @{ Key = "StartVM";          Text = "Start VM after creation";     X = 14;  Y = 88; Default = $true },
     @{ Key = "StrictLegacyMode"; Text = "Strict Legacy Mode (Win10 fallback)"; X = 14;  Y = 118; Default = $false },
     @{ Key = "AutoCreateSwitch"; Text = "Auto-create NAT switch";      X = 274; Y = 28; Default = $true },
-    @{ Key = "EnableMetering";   Text = "Enable Resource Metering";    X = 274; Y = 58; Default = $true }
+    @{ Key = "EnableMetering";   Text = "Enable Resource Metering";    X = 274; Y = 58; Default = $true },
+    @{ Key = "EnableAutoLogon";  Text = "Enable Auto Logon";           X = 274; Y = 88; Default = $true }
 )
 foreach ($chk in $chkNames) {
     $cb = New-Object System.Windows.Forms.CheckBox
@@ -2495,6 +2494,7 @@ $toolTip.SetToolTip($ctrlCreate["DynamicMemMax"], "Highest RAM the VM can grow t
 $toolTip.SetToolTip($ctrlCreate["StrictLegacyMode"], "Forces legacy-safe deployment behavior (non-compact DISM + legacy template order) for older/custom Windows 10 images.")
 $toolTip.SetToolTip($ctrlCreate["AutoCreateSwitch"], "Automatically create an internal NAT switch if selected switch is missing.")
 $toolTip.SetToolTip($ctrlCreate["EnableMetering"], "Collect CPU, memory, network, and disk telemetry for this VM.")
+$toolTip.SetToolTip($ctrlCreate["EnableAutoLogon"], "Automatically signs in the local user for the first setup logons.")
 $toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"], "Controls GPU partition resource share assigned to the VM.")
 $toolTip.SetToolTip($btnUpdateGPU, "Inject/update GPU-P drivers and optional services into selected VMs.")
 $toolTip.SetToolTip($ctrlGPU["VmSearch"], "Type to quickly filter VMs by name.")
@@ -2712,6 +2712,7 @@ $btnCreateVM.Add_Click({
         $StrictLegacyMode     = $ctrlCreate["StrictLegacyMode"].Checked
         $AutoCreateSwitch     = $ctrlCreate["AutoCreateSwitch"].Checked
         $EnableMetering       = $ctrlCreate["EnableMetering"].Checked
+        $EnableAutoLogon      = if ($ctrlCreate.ContainsKey("EnableAutoLogon") -and $ctrlCreate["EnableAutoLogon"]) { [bool]$ctrlCreate["EnableAutoLogon"].Checked } else { $true }
         $EnableNestedVirt     = $ctrlCreate["NestedVirt"].Checked
         $EnableNestedNetFollowup = $ctrlCreate["NestedNetFollowup"].Checked
         $ResetBootOrder       = $ctrlCreate["ResetBootOrder"].Checked
@@ -2794,10 +2795,6 @@ $btnCreateVM.Add_Click({
         if ([string]::IsNullOrWhiteSpace($Username)) { Write-Log "Username is required!" "ERROR"; return }
         if ($Username -notmatch '^[a-zA-Z0-9]+$') { Write-Log "Username cannot contain special characters." "ERROR"; return }
         if ($Username -eq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
-        if (-not (Test-StrongPassword -Value $PasswordText)) {
-            Write-Log "Password must be at least 12 characters and include uppercase, lowercase, number, and special character." "ERROR"
-            return
-        }
         $Password = Convert-PlainTextToSecureString -Text $PasswordText
         if ($EnableDynamicMem) {
             if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
@@ -3066,7 +3063,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Update-CreateProgress -Percent 22 -Status "Generating unattended setup..."
             Write-Log "Generating Autounattend.xml..."
             $UnattendXMLPath = Join-Path $VMLoc "Autounattend.xml"
-            New-UnattendXml -VMName $VMName -Username $Username -Password $Password -IsWindows11 $IsWin11 |
+            New-UnattendXml -VMName $VMName -Username $Username -Password $Password -EnableAutoLogon $EnableAutoLogon -IsWindows11 $IsWin11 |
                 Out-File -FilePath $UnattendXMLPath -Encoding UTF8
 
             # Minimize plaintext password lifetime in memory

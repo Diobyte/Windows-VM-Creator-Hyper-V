@@ -2668,6 +2668,7 @@ try {
         Text            = [System.Drawing.Color]::FromArgb(245, 248, 255)   # Primary text
         TextSecondary   = [System.Drawing.Color]::FromArgb(180, 190, 210)   # Secondary text
         TextMuted       = [System.Drawing.Color]::FromArgb(140, 150, 170)   # Muted text
+        Muted           = [System.Drawing.Color]::FromArgb(140, 150, 170)   # Backward-compatible alias
         Accent          = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Primary accent
         AccentHover     = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Accent hover
         AccentPressed   = [System.Drawing.Color]::FromArgb(25, 75, 200)     # Accent pressed
@@ -2695,6 +2696,7 @@ try {
         Text            = [System.Drawing.SystemColors]::ControlText
         TextSecondary   = [System.Drawing.SystemColors]::ControlText
         TextMuted       = [System.Drawing.SystemColors]::GrayText
+        Muted           = [System.Drawing.SystemColors]::GrayText
         Accent          = [System.Drawing.SystemColors]::Highlight
         AccentHover     = [System.Drawing.SystemColors]::Highlight
         AccentPressed   = [System.Drawing.SystemColors]::Highlight

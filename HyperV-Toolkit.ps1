@@ -1336,6 +1336,52 @@ function Test-GpuPHostReadiness {
     }
 }
 
+function Ensure-HostGpuPartitionCountValid {
+    [CmdletBinding()]
+    param(
+        [string]$PreferredGpuName = ""
+    )
+
+    try {
+        $all = @(Get-VMHostPartitionableGpu -ErrorAction SilentlyContinue)
+        if (-not $all -or $all.Count -eq 0) {
+            return [PSCustomObject]@{ Success = $false; Changed = $false; Message = "No partitionable GPUs reported." }
+        }
+
+        $gpu = $null
+        if (-not [string]::IsNullOrWhiteSpace($PreferredGpuName)) {
+            $gpu = $all | Where-Object { $_.Name -eq $PreferredGpuName } | Select-Object -First 1
+        }
+        if (-not $gpu) { $gpu = $all | Select-Object -First 1 }
+        if (-not $gpu) {
+            return [PSCustomObject]@{ Success = $false; Changed = $false; Message = "Could not resolve target partitionable GPU." }
+        }
+
+        $validCounts = @()
+        if ($gpu.PSObject.Properties['ValidPartitionCounts']) {
+            $validCounts = @($gpu.ValidPartitionCounts | ForEach-Object { [int]$_ } | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
+        }
+        $currentCount = 0
+        if ($gpu.PSObject.Properties['PartitionCount']) {
+            $currentCount = [int]$gpu.PartitionCount
+        }
+
+        if (-not $validCounts -or $validCounts.Count -eq 0) {
+            return [PSCustomObject]@{ Success = $true; Changed = $false; Message = "ValidPartitionCounts not reported by driver; skipping partition-count normalization." }
+        }
+
+        if ($validCounts -contains $currentCount) {
+            return [PSCustomObject]@{ Success = $true; Changed = $false; Message = "Host GPU partition count is valid ($currentCount)." }
+        }
+
+        $targetCount = ($validCounts | Measure-Object -Maximum).Maximum
+        Set-VMHostPartitionableGpu -Name $gpu.Name -PartitionCount ([UInt16]$targetCount) -ErrorAction Stop | Out-Null
+        return [PSCustomObject]@{ Success = $true; Changed = $true; Message = "Adjusted host GPU partition count from $currentCount to valid value $targetCount." }
+    } catch {
+        return [PSCustomObject]@{ Success = $false; Changed = $false; Message = $_.Exception.Message }
+    }
+}
+
 function Get-HostNvidiaDriverVersion {
     try {
         $nvidiaDrivers = Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
@@ -2913,7 +2959,8 @@ function Set-GpuPartitionForVM {
     param(
         [string]$VMName,
         [ValidateRange(10,100)]
-        [int]$AllocationPercent = 100
+        [int]$AllocationPercent = 100,
+        [bool]$ConservativeProfile = $true
     )
 
     try {
@@ -2940,25 +2987,32 @@ function Set-GpuPartitionForVM {
         ErrorAction = 'Stop'
     }
 
-    if ($partitionValues.VRAM.Supported) {
-        $setParams['MinPartitionVRAM'] = $partitionValues.VRAM.Min
-        $setParams['MaxPartitionVRAM'] = $partitionValues.VRAM.Max
-        $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal
-    }
-    if ($partitionValues.Encode.Supported) {
-        $setParams['MinPartitionEncode'] = $partitionValues.Encode.Min
-        $setParams['MaxPartitionEncode'] = $partitionValues.Encode.Max
-        $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal
-    }
-    if ($partitionValues.Decode.Supported) {
-        $setParams['MinPartitionDecode'] = $partitionValues.Decode.Min
-        $setParams['MaxPartitionDecode'] = $partitionValues.Decode.Max
-        $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal
-    }
-    if ($partitionValues.Compute.Supported) {
-        $setParams['MinPartitionCompute'] = $partitionValues.Compute.Min
-        $setParams['MaxPartitionCompute'] = $partitionValues.Compute.Max
-        $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal
+    if ($ConservativeProfile) {
+        if ($partitionValues.VRAM.Supported) { $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal }
+        if ($partitionValues.Encode.Supported) { $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal }
+        if ($partitionValues.Decode.Supported) { $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal }
+        if ($partitionValues.Compute.Supported) { $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal }
+    } else {
+        if ($partitionValues.VRAM.Supported) {
+            $setParams['MinPartitionVRAM'] = $partitionValues.VRAM.Min
+            $setParams['MaxPartitionVRAM'] = $partitionValues.VRAM.Max
+            $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal
+        }
+        if ($partitionValues.Encode.Supported) {
+            $setParams['MinPartitionEncode'] = $partitionValues.Encode.Min
+            $setParams['MaxPartitionEncode'] = $partitionValues.Encode.Max
+            $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal
+        }
+        if ($partitionValues.Decode.Supported) {
+            $setParams['MinPartitionDecode'] = $partitionValues.Decode.Min
+            $setParams['MaxPartitionDecode'] = $partitionValues.Decode.Max
+            $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal
+        }
+        if ($partitionValues.Compute.Supported) {
+            $setParams['MinPartitionCompute'] = $partitionValues.Compute.Min
+            $setParams['MaxPartitionCompute'] = $partitionValues.Compute.Max
+            $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal
+        }
     }
 
     try {
@@ -2974,7 +3028,7 @@ function Set-GpuPartitionForVM {
     }
 
     $vmConfig = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    [UInt64]$targetLowMmio = 1GB
+    [UInt64]$targetLowMmio = 3GB
     [UInt64]$targetHighMmio = 32GB
     if ($vmConfig) {
         if ([UInt64]$vmConfig.LowMemoryMappedIoSpace -gt $targetLowMmio) {
@@ -6552,6 +6606,20 @@ $btnUpdateGPU.Add_Click({
                 else { Write-Log $issue "INFO" }
             }
 
+            $preferredHostGpuName = if ($providerObj -and $providerObj.Provider) { [string]$providerObj.Name } else { "" }
+            $partitionCountFix = Ensure-HostGpuPartitionCountValid -PreferredGpuName $preferredHostGpuName
+            if (-not $partitionCountFix.Success) {
+                if ($strictChecks) {
+                    Write-Log "GPU host partition-count validation failed: $($partitionCountFix.Message). Aborting due to strict checks." "ERROR"
+                    return
+                }
+                Write-Log "GPU host partition-count validation warning: $($partitionCountFix.Message)" "WARN"
+            } elseif ($partitionCountFix.Changed) {
+                Write-Log "GPU host partition-count normalized: $($partitionCountFix.Message)" "WARN"
+            } else {
+                Write-Log "GPU host partition-count check: $($partitionCountFix.Message)" "INFO"
+            }
+
             $requireSriov = ($script:HostOsName -match 'Windows Server')
             $hostReadiness = Test-GpuPHostReadiness -RequireSriov:$requireSriov
             foreach ($warn in $hostReadiness.Warnings) { Write-Log "GPU host readiness: $warn" "WARN" }
@@ -6601,6 +6669,7 @@ $btnUpdateGPU.Add_Click({
             $skipDriverInjection = $false
             $skipHostDriverInjection = $false
             $gpuAdapterConfigured = $false
+            $keepGpuAdapter = $false
             $startVmPending = $false
 
             try {
@@ -6621,14 +6690,11 @@ $btnUpdateGPU.Add_Click({
                     try {
                         $vmProcessor = Get-VMProcessor -VMName $VMName -ErrorAction SilentlyContinue
                         if ($vmProcessor -and $vmProcessor.ExposeVirtualizationExtensions) {
-                            if ($strictChecks) {
-                                Write-Log "[$VMName] Nested virtualization is enabled. NVIDIA vGPU stacks may be unsupported in this state. Skipping due to strict checks." "ERROR"
-                                continue
-                            }
-                            Write-Log "[$VMName] Nested virtualization is enabled. NVIDIA vGPU stacks may be unsupported in this state." "WARN"
+                            Write-Log "[$VMName] Nested virtualization is enabled. Disabling ExposeVirtualizationExtensions for NVIDIA GPU-P stability." "WARN"
+                            Set-VMProcessor -VMName $VMName -ExposeVirtualizationExtensions $false -ErrorAction Stop
                         }
                     } catch {
-                        Write-Log "[$VMName] Could not verify nested virtualization state: $($_.Exception.Message)" "WARN"
+                        Write-Log "[$VMName] Could not normalize nested virtualization state: $($_.Exception.Message)" "WARN"
                     }
                 }
 
@@ -6674,7 +6740,7 @@ $btnUpdateGPU.Add_Click({
                             Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
                         }
 
-                        Set-GpuPartitionForVM -VMName $VMName -AllocationPercent $gpuAllocPercent
+                        Set-GpuPartitionForVM -VMName $VMName -AllocationPercent $gpuAllocPercent -ConservativeProfile $true
                         Write-Log "[$VMName] GPU-P adapter configured." "OK"
                         $gpuAdapterConfigured = $true
                     } catch {
@@ -6689,7 +6755,7 @@ $btnUpdateGPU.Add_Click({
                     try {
                         Write-Log "[$VMName] Adding GPU-P adapter (default selection)"
                         Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-                        Set-GpuPartitionForVM -VMName $VMName -AllocationPercent $gpuAllocPercent
+                        Set-GpuPartitionForVM -VMName $VMName -AllocationPercent $gpuAllocPercent -ConservativeProfile $true
                         Write-Log "[$VMName] GPU-P adapter configured." "OK"
                         $gpuAdapterConfigured = $true
                     } catch {
@@ -6839,6 +6905,7 @@ $btnUpdateGPU.Add_Click({
                 }
 
                 Write-Log "[$VMName] GPU drivers injected." "OK"
+                $keepGpuAdapter = $true
 
                 # Defer VM start until after VHD dismount in finally
                 if ($startAfterUpdate) {
@@ -6873,6 +6940,21 @@ $btnUpdateGPU.Add_Click({
                     if (-not (Wait-ImageDetached -ImagePath $vhdPath -TimeoutSec 20)) {
                         Write-Log "[$VMName] VHD still appears attached after dismount wait; skipping auto-start to avoid file-lock failure." "WARN"
                         $canStartVm = $false
+                    }
+                }
+
+                if ($gpuAdapterConfigured -and -not $keepGpuAdapter) {
+                    try {
+                        Remove-VMGpuPartitionAdapter -VMName $VMName -Confirm:$false -ErrorAction SilentlyContinue
+                        Start-Sleep -Seconds 1
+                        $leftoverAdapter = @(Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue)
+                        if ($leftoverAdapter.Count -eq 0) {
+                            Write-Log "[$VMName] Rolled back GPU-P adapter due to incomplete/failed GPU update path." "WARN"
+                        } else {
+                            Write-Log "[$VMName] GPU-P rollback attempted but adapter still present." "WARN"
+                        }
+                    } catch {
+                        Write-Log "[$VMName] GPU-P rollback failed: $($_.Exception.Message)" "WARN"
                     }
                 }
 

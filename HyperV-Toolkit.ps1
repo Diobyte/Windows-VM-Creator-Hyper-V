@@ -6473,11 +6473,12 @@ if (-not [string]::IsNullOrWhiteSpace($script:CliVMName)) {
     Write-Log "CLI prefill: VM Name set from parameter." "INFO"
 }
 if (-not [string]::IsNullOrWhiteSpace($script:CliISOPath)) {
-    $ctrlCreate["ISOPath"].Text = $script:CliISOPath.Trim()
-    if (Test-Path $script:CliISOPath) {
+    $prefillIsoPath = $script:CliISOPath.Trim()
+    $ctrlCreate["ISOPath"].Text = $prefillIsoPath
+    if (Test-PathCached $prefillIsoPath) {
         Write-Log "CLI prefill: ISO path set from parameter. Use Browse ISO to load editions and mount source." "INFO"
     } else {
-        Write-Log "CLI prefill warning: provided ISO path does not exist: $script:CliISOPath" "WARN"
+        Write-Log "CLI prefill warning: provided ISO path does not exist: $prefillIsoPath" "WARN"
     }
 }
 if ($script:CliWhatIf) {

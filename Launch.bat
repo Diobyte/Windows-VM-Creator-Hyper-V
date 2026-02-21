@@ -6,6 +6,7 @@ set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_PATH=%SCRIPT_DIR%HyperV-Toolkit.ps1"
 set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LAUNCH_LOG=%TEMP%\HyperV-Toolkit-Launcher.log"
+set "USER_ARGS=%*"
 
 :: Rotate launcher log if larger than 100 KB to prevent unbounded growth
 if exist "%LAUNCH_LOG%" (
@@ -71,9 +72,10 @@ if %ERRORLEVEL% neq 0 (
     echo  Requesting administrator privileges...
     echo.
     set "LAUNCHER_PATH=%~f0"
+    set "ELEVATED_ARGS=--elevated %USER_ARGS%"
     "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
         "try { Start-Process -FilePath $env:LAUNCHER_PATH -Verb RunAs" ^
-        "      -ArgumentList '--elevated' -ErrorAction Stop; exit 0" ^
+        "      -ArgumentList $env:ELEVATED_ARGS -ErrorAction Stop; exit 0" ^
         "} catch { exit 1 }" >nul 2>&1
     if %ERRORLEVEL% neq 0 (
         call :log "ERROR: elevation request failed"
@@ -121,7 +123,7 @@ echo.
 :: ----------------------------------------------------------------
 call :log "Launching toolkit (hidden console)"
 "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden ^
-    -File "%SCRIPT_PATH%"
+    -File "%SCRIPT_PATH%" %*
 
 set "LAUNCH_EXIT_CODE=%ERRORLEVEL%"
 call :log "Toolkit exited with code: %LAUNCH_EXIT_CODE%"

@@ -15,14 +15,16 @@ if not exist "%SCRIPT_PATH%" (
 )
 
 :: Check for admin privileges
-net session >nul 2>&1
+fltmc >nul 2>&1
 if %errorLevel% neq 0 (
     echo.
     echo  Requesting administrator privileges...
     echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'PowerShell.exe' -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Sta','-File','\"%SCRIPT_PATH%\"'"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs -ArgumentList '--elevated'"
     exit /b
 )
+
+if /i "%~1"=="--elevated" shift
 
 :: Change to script directory
 cd /d "%SCRIPT_DIR%"

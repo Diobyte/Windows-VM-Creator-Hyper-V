@@ -2190,7 +2190,6 @@ Update-VMList
 
 $ctrlGPU["VmSearch"].Add_TextChanged({ Update-VMList })
 $btnClearVmSearch.Add_Click({ $ctrlGPU["VmSearch"].Text = ""; Update-VMList })
-$ctrlGPU["GpuSelector"].Add_SelectedIndexChanged({ Update-GpuActionState })
 
 # Select All / None buttons
 $btnSelectAll = New-Object System.Windows.Forms.Button
@@ -2241,6 +2240,7 @@ $ctrlGPU["GpuSelector"].DropDownStyle = 'DropDownList'
 $ctrlGPU["GpuSelector"].Width    = 340
 $ctrlGPU["GpuSelector"].Location = New-Object System.Drawing.Point(95, 25)
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuSelector"])
+$ctrlGPU["GpuSelector"].Add_SelectedIndexChanged({ Update-GpuActionState })
 
 # Populate GPU list
 $script:GpuPList = Get-GpuPProviders

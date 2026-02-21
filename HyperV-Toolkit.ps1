@@ -2422,16 +2422,36 @@ function Update-TabLayouts {
         $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
         $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 270)
 
-        $rightColumnX = [Math]::Max(220, [int]($rightWidth * 0.55))
-        $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
-        $ctrlCreate["EnableMetering"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
-        $ctrlCreate["EnableAutoLogon"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
+        $twoColRight = ($rightWidth -ge 500)
+        $rightColumnX = if ($twoColRight) { [Math]::Max(250, [int]($rightWidth * 0.55)) } else { 14 }
 
-        $ctrlCreate["VBCable"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
-        $ctrlCreate["RDP"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
-        $ctrlCreate["PauseUpdate"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
-        $ctrlCreate["NestedVirt"].Location = New-Object System.Drawing.Point($rightColumnX, 118)
-        $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($rightColumnX, 148)
+        if ($twoColRight) {
+            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
+            $ctrlCreate["EnableMetering"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
+            $ctrlCreate["EnableAutoLogon"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
+
+            $ctrlCreate["VBCable"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
+            $ctrlCreate["RDP"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
+            $ctrlCreate["PauseUpdate"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
+            $ctrlCreate["NestedVirt"].Location = New-Object System.Drawing.Point($rightColumnX, 118)
+            $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($rightColumnX, 148)
+        } else {
+            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point(14, 58)
+            $ctrlCreate["EnableMetering"].Location = New-Object System.Drawing.Point(14, 88)
+            $ctrlCreate["EnableAutoLogon"].Location = New-Object System.Drawing.Point(14, 118)
+            $ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 142)
+
+            $ctrlCreate["VBCable"].Location = New-Object System.Drawing.Point(14, 58)
+            $ctrlCreate["RDP"].Location = New-Object System.Drawing.Point(14, 88)
+            $ctrlCreate["PauseUpdate"].Location = New-Object System.Drawing.Point(14, 118)
+            $ctrlCreate["NestedVirt"].Location = New-Object System.Drawing.Point(14, 148)
+            $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point(14, 178)
+        }
+
+        if ($twoColRight) {
+            $ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 124)
+        }
+        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 30)
 
         $goldenLabelWidth = 95
         $goldenBrowseWidth = 52
@@ -2444,9 +2464,17 @@ function Update-TabLayouts {
         $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point($tabPadding, $ctrlCreate["ValidationHint"].Bottom + 4)
 
         $statusY = $ctrlCreate["ModeHint"].Bottom + 6
-        $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
-        $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($statusY + 20))
         $btnCreateVM.Location = New-Object System.Drawing.Point($rightX + [Math]::Max(0, [int](($rightWidth - $btnCreateVM.Width) / 2)), ($statusY - 4))
+
+        $createInfoWidth = if ($singleCreateColumn) {
+            [Math]::Max(360, $createWidth - 16)
+        } else {
+            [Math]::Max(280, [Math]::Min($leftWidth - 16, $btnCreateVM.Left - $tabPadding - 16))
+        }
+        $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
+        $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($createInfoWidth, 18)
+        $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($statusY + 20))
+        $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size($createInfoWidth, 14)
 
         # ----- GPU tab -----
         $gpuWidth = [Math]::Max(680, $tabGPU.ClientSize.Width - (2 * $tabPadding))
@@ -2484,9 +2512,11 @@ function Update-TabLayouts {
         $btnSelectNone.Location = New-Object System.Drawing.Point(74, ($vmPanel.Bottom + 8))
         $btnRefreshVMs.Location = New-Object System.Drawing.Point(140, ($vmPanel.Bottom + 8))
 
-        $ctrlGPU["GpuSelector"].Width = [Math]::Max(220, $grpGPUSettings.Width - 110)
-        $ctrlGPU["GpuAllocSlider"].Width = [Math]::Max(150, $grpGPUSettings.Width - 250)
-        $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point(($ctrlGPU["GpuAllocSlider"].Right + 8), 158)
+        $ctrlGPU["GpuSelector"].Width = [Math]::Max(180, $grpGPUSettings.Width - 115)
+        $sliderWidth = [Math]::Max(120, $grpGPUSettings.Width - 250)
+        $ctrlGPU["GpuAllocSlider"].Width = $sliderWidth
+        $allocLabelX = [Math]::Min(($ctrlGPU["GpuAllocSlider"].Right + 8), ($grpGPUSettings.Width - 52))
+        $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point([Math]::Max(10, $allocLabelX), 158)
     } catch {
         Write-Output "Tab layout adjustment warning: $($_.Exception.Message)"
     }

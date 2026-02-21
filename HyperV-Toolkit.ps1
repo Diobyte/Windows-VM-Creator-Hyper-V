@@ -2594,8 +2594,8 @@ $btnCreateVM.Add_Click({
     $VHDPath = ""
     $preflightLines = @()
     $rollbackNeeded = $false
-    $originalAutoPlay = $null
     $autoPlayChanged = $false
+    $vhdMountedForDeploy = $false
 
     try {
         Update-CreateProgress -Percent 2 -Status "Validating VM settings..."
@@ -3380,7 +3380,6 @@ $btnUpdateGPU.Add_Click({
     if ($script:IsUpdatingGPU) { return }
     $script:IsUpdatingGPU = $true
 
-    $originalAutoPlay = $null
     $autoPlayChanged = $false
 
     try {

@@ -1388,6 +1388,38 @@ function Get-NvidiaDriverVersionFromGuestStore {
     }
 }
 
+function Get-GuestWindowsBuildFromMountedVolume {
+    param([string]$MountLetter)
+
+    if ([string]::IsNullOrWhiteSpace($MountLetter)) { return 0 }
+
+    $softwareHive = Join-Path "$MountLetter\" 'Windows\System32\Config\SOFTWARE'
+    if (-not (Test-Path $softwareHive)) { return 0 }
+
+    $hiveName = "__gpu_guest_build_$([Guid]::NewGuid().ToString('N'))"
+    $hiveRoot = "HKU\$hiveName"
+    $loaded = $false
+
+    try {
+        & reg.exe load $hiveRoot "$softwareHive" *> $null
+        if ($LASTEXITCODE -ne 0) { return 0 }
+        $loaded = $true
+
+        $buildRaw = (Get-ItemProperty -Path "Registry::$hiveRoot\Microsoft\Windows NT\CurrentVersion" -Name CurrentBuild -ErrorAction SilentlyContinue).CurrentBuild
+        $parsed = 0
+        if ([int]::TryParse([string]$buildRaw, [ref]$parsed)) {
+            return $parsed
+        }
+        return 0
+    } catch {
+        return 0
+    } finally {
+        if ($loaded) {
+            & reg.exe unload $hiveRoot *> $null
+        }
+    }
+}
+
 function Get-DriverVersionBranch {
     param([string]$VersionString)
 
@@ -1535,6 +1567,118 @@ function Copy-GpuServiceDriver {
         }
     } catch {
         Write-Log "GPU service driver copy error: $($_.Exception.Message)" "WARN"
+    }
+}
+
+function Copy-GpuReferencedFiles {
+    [CmdletBinding()]
+    param(
+        [string]$MountLetter,
+        [string]$GPUName = "AUTO"
+    )
+
+    $copied = 0
+    try {
+        if ([string]::IsNullOrWhiteSpace($MountLetter)) {
+            return @{ Success = $false; Copied = 0 }
+        }
+
+        $gpu = $null
+        if ($GPUName -eq "AUTO") {
+            $partList = Get-CimInstance -Namespace "ROOT\virtualization\v2" -ClassName "Msvm_PartitionableGpu" -ErrorAction SilentlyContinue
+            if ($partList) {
+                $devPath = if ($partList.Name -is [array]) { $partList.Name[0] } else { $partList.Name }
+                $pciSegments = $devPath -split '#'
+                $matchPattern = if ($pciSegments.Count -gt 1 -and $pciSegments[1].Length -ge 8) {
+                    "*$($pciSegments[1].Substring(0, [Math]::Min($pciSegments[1].Length, 21)))*"
+                } elseif ($devPath.Length -ge 24) {
+                    "*$($devPath.Substring(8, 16))*"
+                } else {
+                    $null
+                }
+                if ($matchPattern) {
+                    $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object {
+                        $_.DeviceID -like $matchPattern
+                    } | Select-Object -First 1
+                }
+            }
+        } else {
+            $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq $GPUName } | Select-Object -First 1
+        }
+
+        if (-not $gpu) {
+            Write-Log "Could not resolve GPU PnP device for referenced file copy" "WARN"
+            return @{ Success = $false; Copied = 0 }
+        }
+
+        $driverEntries = Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue | Where-Object {
+            $_.DeviceClass -eq 'DISPLAY' -and (
+                ($gpu.InstanceId -and $_.DeviceID -eq $gpu.InstanceId) -or
+                ($gpu.FriendlyName -and $_.DeviceName -eq $gpu.FriendlyName)
+            )
+        }
+
+        if (-not $driverEntries) {
+            Write-Log "Could not resolve Win32_PnPSignedDriver entries for $($gpu.FriendlyName)." "WARN"
+            return @{ Success = $false; Copied = 0 }
+        }
+
+        $hostWindowsRoot = [System.IO.Path]::GetFullPath($env:WINDIR)
+        $hostWindowsRootLower = $hostWindowsRoot.ToLowerInvariant()
+        $hostDriverStoreRootLower = (Join-Path $hostWindowsRoot 'System32\DriverStore').ToLowerInvariant()
+
+        foreach ($drv in $driverEntries) {
+            $files = @()
+            try {
+                $files = @(Get-CimAssociatedInstance -InputObject $drv -ResultClassName CIM_DataFile -ErrorAction SilentlyContinue)
+            } catch {
+                $files = @()
+            }
+
+            foreach ($file in $files) {
+                $srcPath = [string]$file.Name
+                if ([string]::IsNullOrWhiteSpace($srcPath) -or -not (Test-Path $srcPath)) { continue }
+
+                $srcFull = [System.IO.Path]::GetFullPath($srcPath)
+                $srcLower = $srcFull.ToLowerInvariant()
+                if (-not $srcLower.StartsWith($hostWindowsRootLower)) { continue }
+
+                $destPath = $null
+                if ($srcLower.StartsWith($hostDriverStoreRootLower)) {
+                    $relative = $srcFull.Substring($hostWindowsRoot.Length).TrimStart('\')
+                    if ($relative -match '^(?i)System32\\DriverStore\\') {
+                        $relative = $relative -replace '^(?i)System32\\DriverStore\\', 'System32\\HostDriverStore\\'
+                    }
+                    $destPath = Join-Path "$MountLetter\Windows" $relative
+                } else {
+                    $relative = $srcFull.Substring($hostWindowsRoot.Length).TrimStart('\\')
+                    $destPath = Join-Path "$MountLetter\Windows" $relative
+                }
+
+                $destDir = Split-Path -Parent $destPath
+                if (-not (Test-Path $destDir)) {
+                    New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+                }
+
+                try {
+                    Copy-Item -Path $srcFull -Destination $destPath -Force -ErrorAction Stop
+                    $copied++
+                } catch {
+                    Write-Log "Failed to copy referenced GPU file '$srcFull': $($_.Exception.Message)" "WARN"
+                }
+            }
+        }
+
+        if ($copied -gt 0) {
+            Write-Log "Copied $copied referenced GPU driver file(s) to guest Windows paths." "OK"
+        } else {
+            Write-Log "No referenced GPU files were copied from Win32_PnPSignedDriver associations." "WARN"
+        }
+
+        return @{ Success = ($copied -gt 0); Copied = $copied }
+    } catch {
+        Write-Log "GPU referenced file copy error: $($_.Exception.Message)" "WARN"
+        return @{ Success = $false; Copied = $copied }
     }
 }
 
@@ -6411,6 +6555,21 @@ $btnUpdateGPU.Add_Click({
                 }
                 Write-Log "[$VMName] Mounted at $mountLetter"
 
+                $guestBuild = Get-GuestWindowsBuildFromMountedVolume -MountLetter $mountLetter
+                if ($guestBuild -gt 0 -and $script:HostBuild -gt 0) {
+                    Write-Log "[$VMName] Build check: host=$($script:HostBuild), guest=$guestBuild" "INFO"
+                    $hostIsWin11 = ($script:HostBuild -ge $script:BUILD_WIN11_MIN)
+                    $guestIsWin11 = ($guestBuild -ge $script:BUILD_WIN11_MIN)
+                    if ($hostIsWin11 -ne $guestIsWin11) {
+                        $msg = "[$VMName] Host/guest major OS generation mismatch detected (Win10 vs Win11). This is known to destabilize GPU-P driver injection."
+                        if ($strictChecks) {
+                            Write-Log "$msg Strict checks enabled, skipping VM." "ERROR"
+                            continue
+                        }
+                        Write-Log "$msg Continuing because strict checks are disabled." "WARN"
+                    }
+                }
+
                 if (-not $removeOnlyMode -and $gpuVendor -eq 'NVIDIA' -and $hostNvidiaVersion) {
                     $guestNvidiaVersion = Get-NvidiaDriverVersionFromGuestStore -MountLetter $mountLetter
                     if ($guestNvidiaVersion) {
@@ -6436,47 +6595,12 @@ $btnUpdateGPU.Add_Click({
                     continue
                 }
 
-                # Copy vendor-specific System32 DLLs
-                if ($script:SupportsGpuInstancePath -and $providerObj -and $providerObj.Provider) {
-                    switch ($gpuVendor) {
-                        "NVIDIA" {
-                            # Copy NVIDIA System32 DLLs using targeted patterns to avoid
-                            # overwriting unrelated files that happen to start with 'nv'.
-                            Write-Log "[$VMName] Copying NVIDIA System32 DLLs..."
-                            foreach ($pat in $script:NvidiaDllPatterns) {
-                                Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                    -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
-                            }
-                        }
-                        "AMD" {
-                            Write-Log "[$VMName] Copying AMD System32 DLLs..."
-                            Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask "amdkmd*"
-                        }
-                        "Intel" {
-                            Write-Log "[$VMName] Copying Intel System32 DLLs..."
-                            Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask "igfx*"
-                        }
-                        default {
-                            # Unknown vendor with SupportsGpuInstancePath - copy all known vendor DLLs
-                            Write-Log "[$VMName] Copying all known GPU vendor System32 DLLs (vendor: $gpuVendor)..."
-                            $allPatterns = $script:NvidiaDllPatterns + @('amdkmd*','igfx*')
-                            foreach ($pat in $allPatterns) {
-                                Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                    -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
-                            }
-                        }
-                    }
-                } else {
-                    # Win10 default - check for NVIDIA
-                    if (Test-HostHasNvidiaGpu) {
-                        Write-Log "[$VMName] Host has NVIDIA GPU, copying NVIDIA DLLs..."
-                        foreach ($pat in $script:NvidiaDllPatterns) {
-                            Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
-                        }
-                    }
+                # Copy precise file set referenced by active display driver package(s)
+                $gpuCopyName = if ($providerObj -and $providerObj.Provider) { $providerObj.Friendly } else { "AUTO" }
+                $refCopy = Copy-GpuReferencedFiles -MountLetter $mountLetter -GPUName $gpuCopyName
+                if ($strictChecks -and (-not $refCopy.Success)) {
+                    Write-Log "[$VMName] Strict checks enabled and referenced GPU file copy failed. Skipping VM to avoid unstable boot state." "ERROR"
+                    continue
                 }
 
                 if ($copySvcDriver) {

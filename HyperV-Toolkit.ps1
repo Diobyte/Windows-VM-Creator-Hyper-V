@@ -279,7 +279,7 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
             try {
                 Enable-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -All -NoRestart -ErrorAction Stop *> $null
                 bcdedit /set hypervisorlaunchtype auto *> $null
-                if ($LASTEXITCODE -ne 0) {
+                if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
                     Write-Host "    Warning: bcdedit returned exit code $LASTEXITCODE" -ForegroundColor Yellow
                 }
                 $restartChoice = [System.Windows.MessageBox]::Show(
@@ -307,8 +307,9 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
 }
 
 Write-Host "  [6/7] Detecting host configuration..." -ForegroundColor DarkGray
-# Detect host OS
+# Detect host OS and hardware (cache CIM results to avoid redundant queries during GUI setup)
 $script:HostOsName = (Get-CimInstance Win32_OperatingSystem).Caption
+$script:HostComputerSystem = Get-CimInstance Win32_ComputerSystem
 $script:HostBuild  = 0
 try {
     $rawBuild = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuild
@@ -883,6 +884,9 @@ function Set-ToolkitNatSwitch {
     $switchCreatedByUs = $false
     try {
         $existingSwitch = Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue
+        if ($existingSwitch -and $existingSwitch.SwitchType -ne 'Internal') {
+            Write-Log "Existing switch '$SwitchName' is type '$($existingSwitch.SwitchType)' (expected Internal). NAT configuration may not work correctly." "WARN"
+        }
         if (-not $existingSwitch) {
             Write-Log "No usable virtual switch selected. Creating internal NAT switch '$SwitchName'..." "WARN"
             New-VMSwitch -Name $SwitchName -SwitchType Internal -ErrorAction Stop | Out-Null
@@ -2678,11 +2682,10 @@ function Update-StatusBar {
     }
     if ($script:HeaderStatusLabel) {
         $script:HeaderStatusLabel.Text = "  $Message"
-        $lc = $Message.ToLower()
         $script:HeaderStatusLabel.ForeColor = `
-            $(if ($lc -match 'error|fail')            { $theme.Danger }
-              elseif ($lc -match 'warn')              { $theme.Warning }
-              elseif ($lc -match 'ok|ready|complete|success|done') { $theme.Success }
+            $(if ($Message -match 'error|fail')            { $theme.Danger }
+              elseif ($Message -match 'warn')              { $theme.Warning }
+              elseif ($Message -match 'ok|ready|complete|success|done') { $theme.Success }
               else                                    { $theme.Info })
     }
 }
@@ -3114,7 +3117,7 @@ $ctrlCreate["vCPU"] = New-LabeledControl $grpConfig 12 $rowY "vCPUs:" -LabelWidt
     -ControlProps @{ Minimum = 1; Maximum = [Environment]::ProcessorCount; Value = [Math]::Min(4, [Environment]::ProcessorCount); DecimalPlaces = 0 }
 $rowY += 34
 
-$totalRamGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$totalRamGB = [math]::Round($script:HostComputerSystem.TotalPhysicalMemory / 1GB)
 $ctrlCreate["Memory"] = New-LabeledControl $grpConfig 12 $rowY "Memory (GB):" -LabelWidth 130 -ControlType NumericUpDown -ControlWidth 80 `
     -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(8, $totalRamGB); DecimalPlaces = 0 }
 $rowY += 34
@@ -3689,7 +3692,7 @@ try {
     $ctrlEnv["VMMSService"].Text = if ($vmmsService) { [string]$vmmsService.Status } else { "Not found" }
 } catch { $ctrlEnv["VMMSService"].Text = "Unknown" }
 
-$ctrlEnv["TotalRAM"].Text = [string][math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$ctrlEnv["TotalRAM"].Text = [string][math]::Round($script:HostComputerSystem.TotalPhysicalMemory / 1GB)
 
 # ── GPU Information ─────────────────────────────────────────
 $grpGpuInfo = New-ThemedGroupBox "GPU Information" $pnlEnvBody
@@ -3986,10 +3989,14 @@ $form.Add_Resize({
     $script:LayoutTimer.Stop()
     $script:LayoutTimer.Start()
 })
-$form.Add_DpiChanged({
-    $script:LayoutTimer.Stop()
-    $script:LayoutTimer.Start()
-})
+try {
+    $form.Add_DpiChanged({
+        $script:LayoutTimer.Stop()
+        $script:LayoutTimer.Start()
+    })
+} catch {
+    Write-StartupTrace -Message "DpiChanged event not available on this .NET runtime (requires .NET 4.7+)" -Level 'WARN'
+}
 
 # ============================================================
 #  BUTTON HOVER HELPERS  (kept for compatibility)
@@ -4821,6 +4828,10 @@ $btnCreateVM.Add_Click({
         }
         if ($VMName -match '-$') { throw "VM Name cannot end with a hyphen." }
         if ($VMName.Length -gt 64) { throw "VM Name must be 64 characters or less." }
+        $reservedDeviceNames = @('CON','PRN','AUX','NUL','COM1','COM2','COM3','COM4','COM5','COM6','COM7','COM8','COM9','LPT1','LPT2','LPT3','LPT4','LPT5','LPT6','LPT7','LPT8','LPT9')
+        if ($VMName.ToUpperInvariant() -in $reservedDeviceNames) {
+            throw "VM Name cannot be a Windows reserved device name ('$VMName')."
+        }
         if ($VMName.Length -gt 15) { Write-Log "VM Name is longer than 15 characters. This is valid for Hyper-V, but may reduce compatibility with legacy NetBIOS-dependent workflows." "WARN" }
         if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) { throw "A VM named '$VMName' already exists!" }
 
@@ -4888,6 +4899,10 @@ $btnCreateVM.Add_Click({
             if ([string]::IsNullOrWhiteSpace($Username)) { throw "Username is required!" }
             if ($Username -notmatch '^[a-zA-Z0-9]+$') { throw "Username cannot contain special characters." }
             if ($Username -ieq $VMName) { throw "Username cannot be the same as VM Name (causes admin permission issues in the VM)." }
+            $reservedUserNames = @('Administrator','Guest','DefaultAccount','WDAGUtilityAccount','SYSTEM','NetworkService','LocalService')
+            if ($Username -in $reservedUserNames) {
+                throw "Username cannot be a Windows built-in account name ('$Username')."
+            }
             if ([string]::IsNullOrWhiteSpace($PasswordText)) { throw "Password is required for unattended setup." }
             # Convert password immediately to minimize plaintext lifetime
             $Password = Convert-PlainTextToSecureString -Text $PasswordText
@@ -5226,10 +5241,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Initialize-Disk -Number $diskNumber -PartitionStyle GPT -PassThru | Out-Null
 
             # EFI System Partition (260MB for better compatibility with old Win10)
+            # NOTE: -AssignDriveLetter is attempted here, but Windows often auto-removes
+            # drive letters from ESP partitions after a short delay.  The boot configuration
+            # section below robustly re-acquires a letter right before bcdboot runs.
             $efi = New-Partition -DiskNumber $diskNumber -Size 260MB -GptType "{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}" -AssignDriveLetter
             if (-not $efi.DriveLetter) {
-                Write-Log "EFI partition created but no drive letter was assigned (all letters may be in use). Aborting." "ERROR"
-                throw "EFI partition has no drive letter"
+                Write-Log "EFI partition auto-letter not assigned (will acquire before boot config)." "INFO"
             }
             Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel "System" -Confirm:$false | Out-Null
 
@@ -5291,22 +5308,115 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
         # ---- Create boot files (robust with retry and fallback) ----
         Update-CreateProgress -Percent 70 -Status "Configuring boot files..."
-        $efiDrive = $efi.DriveLetter + ":"
-        Write-Log "Creating UEFI boot files on $efiDrive..."
 
-        # Ensure EFI partition is accessible
-        $efiReady = $false
-        for ($w = 0; $w -lt 10; $w++) {
-            if (Test-Path "$efiDrive\") { $efiReady = $true; break }
-            Start-Sleep -Seconds 1
+        # ---- Robust EFI partition drive letter acquisition ----
+        # Windows auto-removes drive letters from ESP partitions.  The letter captured at
+        # New-Partition time is typically gone after the long DISM apply.  We therefore
+        # re-acquire a working letter here through multiple methods before bcdboot.
+        $efiDrive = $null
+        $efiLetterAssignedByUs = $false
+        $efiRefreshed = $null
+
+        # Method 1: Check if the originally-assigned letter still works
+        if ($efi.DriveLetter -and $efi.DriveLetter -ne [char]0) {
+            $candidateDrive = "$($efi.DriveLetter):"
+            if (Test-Path "$candidateDrive\") {
+                $efiDrive = $candidateDrive
+                Write-Log "EFI partition accessible at original letter $efiDrive" "OK"
+            }
         }
-        if (-not $efiReady) {
-            Write-Log "EFI partition not accessible at $efiDrive, attempting drive letter reassignment..." "WARN"
+
+        # Method 2: Re-query the partition — Windows may have reassigned a different letter
+        if (-not $efiDrive) {
             try {
-                $efi | Set-Partition -NewDriveLetter $efi.DriveLetter
-                Start-Sleep -Seconds 2
-            } catch { Write-Log "Drive letter reassignment failed: $_" "WARN" }
+                $efiRefreshed = Get-Partition -DiskNumber $diskNumber |
+                    Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } |
+                    Select-Object -First 1
+            } catch { }
+            if ($efiRefreshed -and $efiRefreshed.DriveLetter -and $efiRefreshed.DriveLetter -ne [char]0) {
+                $candidateDrive = "$($efiRefreshed.DriveLetter):"
+                if (Test-Path "$candidateDrive\") {
+                    $efiDrive = $candidateDrive
+                    Write-Log "EFI partition accessible at refreshed letter $efiDrive" "OK"
+                }
+            }
         }
+
+        # Method 3: Assign a fresh drive letter via Add-PartitionAccessPath
+        if (-not $efiDrive) {
+            Write-Log "EFI drive letter lost (common for ESP partitions). Assigning fresh letter..." "WARN"
+            $usedLetters = @()
+            Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { $usedLetters += $_.DriveLetter }
+            Get-CimInstance Win32_MappedLogicalDisk -ErrorAction SilentlyContinue |
+                ForEach-Object { if ($_.DeviceID) { $usedLetters += $_.DeviceID[0] } }
+            $freeLetter = $null
+            # Prefer higher letters (S-Z then G-R) to avoid collisions with common mounts
+            foreach ($c in [char[]]@(83,84,85,86,87,88,89,90,71,72,73,74,75,76,77,78,79,80,81,82)) {
+                if ($c -notin $usedLetters) { $freeLetter = $c; break }
+            }
+            if (-not $freeLetter) {
+                throw "No free drive letter available for EFI partition (all letters S-Z, G-R in use)."
+            }
+            $targetPart = if ($efiRefreshed) { $efiRefreshed } else { $efi }
+            $accessPathWorked = $false
+            try {
+                $targetPart | Add-PartitionAccessPath -AccessPath "$($freeLetter):" -ErrorAction Stop
+                $efiLetterAssignedByUs = $true
+                Start-Sleep -Seconds 3
+                if (Test-Path "$($freeLetter):\") {
+                    $efiDrive = "$($freeLetter):"
+                    $accessPathWorked = $true
+                    Write-Log "EFI partition mounted at $efiDrive via Add-PartitionAccessPath" "OK"
+                } else {
+                    # Sometimes needs a bit longer; wait and retry
+                    Start-Sleep -Seconds 3
+                    if (Test-Path "$($freeLetter):\") {
+                        $efiDrive = "$($freeLetter):"
+                        $accessPathWorked = $true
+                        Write-Log "EFI partition mounted at $efiDrive via Add-PartitionAccessPath (delayed)" "OK"
+                    }
+                }
+            } catch {
+                Write-Log "Add-PartitionAccessPath failed: $($_.Exception.Message). Trying diskpart..." "WARN"
+            }
+
+            # Method 4: diskpart — most reliable for ESP partitions on all Windows versions
+            if (-not $accessPathWorked) {
+                $dpScript = @"
+select disk $diskNumber
+select partition $($targetPart.PartitionNumber)
+assign letter=$freeLetter
+"@
+                $dpFile = Join-Path $env:TEMP "ht_efi_$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+                try {
+                    $dpScript | Out-File -FilePath $dpFile -Encoding ASCII -Force
+                    $dpResult = & diskpart /s $dpFile 2>&1
+                    $dpExitCode = $LASTEXITCODE
+                    Remove-Item $dpFile -Force -ErrorAction SilentlyContinue
+                    if ($dpExitCode -eq 0) {
+                        $efiLetterAssignedByUs = $true
+                        Start-Sleep -Seconds 3
+                        if (Test-Path "$($freeLetter):\") {
+                            $efiDrive = "$($freeLetter):"
+                            Write-Log "EFI partition mounted at $efiDrive via diskpart" "OK"
+                        } else {
+                            Write-Log "diskpart reported success but $($freeLetter): not accessible." "WARN"
+                        }
+                    } else {
+                        Write-Log "diskpart failed (exit $dpExitCode): $($dpResult | Out-String)" "WARN"
+                    }
+                } catch {
+                    Write-Log "diskpart exception: $($_.Exception.Message)" "WARN"
+                    Remove-Item $dpFile -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        if (-not $efiDrive) {
+            throw "EFI partition inaccessible after all mount attempts (original letter, refresh, Add-PartitionAccessPath, diskpart). Cannot write boot files."
+        }
+
+        Write-Log "Creating UEFI boot files on $efiDrive..."
 
         $bootSuccess = $false
         $attachISOForRecovery = $false
@@ -5324,12 +5434,14 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                         $bootSuccess = $true
                         break
                     } else {
-                        Write-Log "  Exit code $LASTEXITCODE : $($result | Out-String)" "WARN"
+                        Write-Log "  bcdboot exit code $LASTEXITCODE : $($result | Out-String)" "WARN"
                     }
                 } catch {
                     Write-Log "  Exception: $_" "WARN"
                 }
             }
+        } else {
+            Write-Log "Image bcdboot.exe not found at $imageBcdboot; skipping image-native attempt." "INFO"
         }
 
         # Attempt 2: Use host's bcdboot
@@ -5344,7 +5456,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                         $bootSuccess = $true
                         break
                     } else {
-                        Write-Log "  Exit code $LASTEXITCODE : $($result | Out-String)" "WARN"
+                        Write-Log "  bcdboot exit code $LASTEXITCODE : $($result | Out-String)" "WARN"
                     }
                 } catch {
                     Write-Log "  Exception: $_" "WARN"
@@ -5364,7 +5476,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                         $bootSuccess = $true
                         break
                     } else {
-                        Write-Log "  Exit code $LASTEXITCODE : $($result | Out-String)" "WARN"
+                        Write-Log "  bcdboot exit code $LASTEXITCODE : $($result | Out-String)" "WARN"
                     }
                 } catch {
                     Write-Log "  Exception: $_" "WARN"
@@ -5372,8 +5484,78 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             }
         }
 
+        # ---- Verify boot files actually landed on the EFI partition ----
+        $bootmgrEfi = Join-Path $efiDrive "EFI\Microsoft\Boot\bootmgfw.efi"
+        $bcdStore   = Join-Path $efiDrive "EFI\Microsoft\Boot\BCD"
+        if ($bootSuccess) {
+            if (-not (Test-Path $bootmgrEfi)) {
+                Write-Log "bcdboot reported success but bootmgfw.efi NOT found at $bootmgrEfi — marking as failed." "ERROR"
+                $bootSuccess = $false
+            } elseif (-not (Test-Path $bcdStore)) {
+                Write-Log "bcdboot reported success but BCD store NOT found at $bcdStore — marking as failed." "ERROR"
+                $bootSuccess = $false
+            } else {
+                Write-Log "Boot file verification passed: bootmgfw.efi and BCD confirmed on EFI partition." "OK"
+            }
+        }
+
+        # Attempt 4 (last resort): Manually copy boot files from the applied Windows image
+        if (-not $bootSuccess) {
+            Write-Log "Attempting manual boot file copy as last resort..." "WARN"
+            try {
+                $efiBootDir = Join-Path $efiDrive "EFI\Microsoft\Boot"
+                New-Item -Path $efiBootDir -ItemType Directory -Force | Out-Null
+                # Copy bootmgfw.efi from the applied image's Windows\Boot\EFI folder
+                $srcBootmgr = Join-Path "$driveLetter\Windows\Boot\EFI" "bootmgfw.efi"
+                if (Test-Path $srcBootmgr) {
+                    Copy-Item -Path $srcBootmgr -Destination $efiBootDir -Force
+                    # Copy to fallback UEFI path \EFI\Boot\bootx64.efi (or bootaa64.efi on ARM64)
+                    $efiFallbackDir = Join-Path $efiDrive "EFI\Boot"
+                    New-Item -Path $efiFallbackDir -ItemType Directory -Force | Out-Null
+                    $fallbackName = if ($script:HostArch -eq 'arm64') { 'bootaa64.efi' } else { 'bootx64.efi' }
+                    Copy-Item -Path $srcBootmgr -Destination (Join-Path $efiFallbackDir $fallbackName) -Force
+                    Write-Log "Copied bootmgfw.efi to EFI partition + fallback $fallbackName" "OK"
+                    # Copy remaining boot resources (fonts, locales, memtest, etc.)
+                    $srcBootDir = Join-Path "$driveLetter\Windows\Boot\EFI" ""
+                    if (Test-Path $srcBootDir) {
+                        Get-ChildItem -Path $srcBootDir -Recurse -ErrorAction SilentlyContinue |
+                            ForEach-Object {
+                                $relPath = $_.FullName.Substring($srcBootDir.Length)
+                                $destPath = Join-Path $efiBootDir $relPath
+                                if ($_.PSIsContainer) {
+                                    New-Item -Path $destPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+                                } else {
+                                    Copy-Item -Path $_.FullName -Destination $destPath -Force -ErrorAction SilentlyContinue
+                                }
+                            }
+                    }
+                    # Re-run bcdboot to create the BCD store referencing these files
+                    Start-Sleep -Seconds 1
+                    $result = & bcdboot "$driveLetter\Windows" /s $efiDrive /f UEFI 2>&1
+                    if ($LASTEXITCODE -eq 0 -and (Test-Path $bcdStore)) {
+                        Write-Log "BCD store created after manual boot file copy." "OK"
+                        $bootSuccess = $true
+                    } else {
+                        Write-Log "BCD store creation still failed after manual copy. VM will need repair boot." "ERROR"
+                    }
+                } else {
+                    Write-Log "bootmgfw.efi not found in applied image at $srcBootmgr" "ERROR"
+                }
+            } catch {
+                Write-Log "Manual boot file copy failed: $($_.Exception.Message)" "ERROR"
+            }
+        }
+
+        # Clean up the temporarily assigned EFI drive letter (will also vanish on VHD dismount)
+        if ($efiLetterAssignedByUs -and $efiDrive) {
+            try {
+                $cleanupPart = if ($efiRefreshed) { $efiRefreshed } else { $efi }
+                $cleanupPart | Remove-PartitionAccessPath -AccessPath $efiDrive -ErrorAction SilentlyContinue
+            } catch { }
+        }
+
             if (-not $bootSuccess) {
-                Write-Log "Boot file creation failed! ISO will be attached for Windows Setup repair boot." "ERROR"
+                Write-Log "Boot file creation failed after all attempts! ISO will be attached for Windows Setup repair boot." "ERROR"
                 $attachISOForRecovery = $true
             }
 
@@ -6169,6 +6351,19 @@ $btnUpdateGPU.Add_Click({
 
 # ---- Form Closing Cleanup ----
 $form.Add_FormClosing({
+    param($sender, $e)
+    # Warn if a long-running operation is still in progress
+    if ($script:IsCreating -or $script:IsUpdatingGPU) {
+        $closeConfirm = [System.Windows.Forms.MessageBox]::Show(
+            "An operation is still in progress. Are you sure you want to close?`n`nClosing now may leave resources in an inconsistent state.",
+            "Operation In Progress",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if ($closeConfirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+            $e.Cancel = $true
+            return
+        }
+    }
     Invoke-MountCleanup
     # Dispose timers
     if ($script:ValidationTimer)  { $script:ValidationTimer.Stop();  $script:ValidationTimer.Dispose() }

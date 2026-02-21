@@ -7,6 +7,13 @@ set "SCRIPT_PATH=%SCRIPT_DIR%HyperV-Toolkit.ps1"
 set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LAUNCH_LOG=%TEMP%\HyperV-Toolkit-Launcher.log"
 
+:: Rotate launcher log if larger than 100 KB to prevent unbounded growth
+if exist "%LAUNCH_LOG%" (
+    for %%F in ("%LAUNCH_LOG%") do if %%~zF gtr 102400 (
+        del /f /q "%LAUNCH_LOG%" >nul 2>&1
+    )
+)
+
 call :log "Launcher started"
 call :log "Script path: %SCRIPT_PATH%"
 

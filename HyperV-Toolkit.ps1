@@ -3840,7 +3840,7 @@ $lblGpuTitle.Location  = New-Object System.Drawing.Point(14, 8)
 $pnlGpuHeader.Controls.Add($lblGpuTitle)
 
 $lblGpuSub = New-Object System.Windows.Forms.Label
-$lblGpuSub.Text      = "Select VMs, configure GPU-P allocation, and inject / update driver stacks"
+$lblGpuSub.Text      = "Select VMs, set target GPU share, and inject / update driver stacks"
 $lblGpuSub.Font      = $script:FontSmall
 $lblGpuSub.ForeColor = $theme.TextMuted
 $lblGpuSub.AutoSize  = $true
@@ -4071,7 +4071,7 @@ $grpGPUSettings.Controls.Add($ctrlGPU["FullCopy"])
 New-Divider $grpGPUSettings 14 156 446
 
 $lblGpuAlloc = New-Object System.Windows.Forms.Label
-$lblGpuAlloc.Text      = "Resource Allocation:"
+$lblGpuAlloc.Text      = "Target GPU Share:"
 $lblGpuAlloc.AutoSize  = $true
 $lblGpuAlloc.ForeColor = $theme.Text
 $lblGpuAlloc.Location  = New-Object System.Drawing.Point(14, 166)
@@ -4550,7 +4550,7 @@ $toolTip.SetToolTip($ctrlGPU["StartVM"],              "Starts selected VMs after
 $toolTip.SetToolTip($ctrlGPU["AutoExpand"],           "Automatically expands guest VHD if insufficient space during driver copy.")
 $toolTip.SetToolTip($ctrlGPU["CopySvcDriver"],        "Copies GPU service driver components to guest HostDriverStore.")
 $toolTip.SetToolTip($ctrlGPU["StrictChecks"],         "Enforces additional GPU-P safety checks.")
-$toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"],       "Controls GPU partition resource share assigned to the VM.")
+$toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"],       "Controls target GPU share. Toolkit applies this as conservative Optimal partition values for stability.")
 $toolTip.SetToolTip($btnUpdateGPU,                    "Inject/update GPU-P drivers into selected VMs.")
 $toolTip.SetToolTip($ctrlGPU["VmSearch"],             "Type to filter VMs by name.")
 $toolTip.SetToolTip($btnCreateVM,                     "Start VM provisioning with validated settings.")
@@ -6854,12 +6854,7 @@ $btnUpdateGPU.Add_Click({
                         $guestNvidiaBranch = Get-DriverVersionBranch -VersionString $guestNvidiaVersion
                         Write-Log "[$VMName] Guest NVIDIA driver version detected: $guestNvidiaVersion (branch $guestNvidiaBranch)" "INFO"
                         if ($guestNvidiaBranch -ge 0 -and $hostNvidiaBranch -ge 0 -and $guestNvidiaBranch -ne $hostNvidiaBranch) {
-                            if ($strictChecks) {
-                                Write-Log "[$VMName] NVIDIA host/guest driver branch mismatch detected (host=$hostNvidiaBranch, guest=$guestNvidiaBranch). Strict checks enabled: skipping VM to avoid mixed-branch freeze risk." "ERROR"
-                                continue
-                            }
-                            Write-Log "[$VMName] NVIDIA host/guest driver branch mismatch detected (host=$hostNvidiaBranch, guest=$guestNvidiaBranch). Strict checks disabled: skipping host GPU file injection for stability." "WARN"
-                            $skipHostDriverInjection = $true
+                            Write-Log "[$VMName] NVIDIA host/guest driver branch mismatch detected (host=$hostNvidiaBranch, guest=$guestNvidiaBranch). Proceeding with clean guest GPU payload purge and host-branch reinjection." "WARN"
                         }
                     } else {
                         Write-Log "[$VMName] No existing NVIDIA guest driver metadata found in HostDriverStore (fresh or non-NVIDIA guest state)." "INFO"

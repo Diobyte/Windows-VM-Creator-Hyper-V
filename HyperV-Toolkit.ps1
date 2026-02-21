@@ -1958,7 +1958,8 @@ function Set-GpuPartitionForVM {
         -MinPartitionVRAM $partitionValues.VRAM -MaxPartitionVRAM $partitionValues.VRAM -OptimalPartitionVRAM $partitionValues.VRAM `
         -MinPartitionEncode $partitionValues.Encode -MaxPartitionEncode $partitionValues.Encode -OptimalPartitionEncode $partitionValues.Encode `
         -MinPartitionDecode $partitionValues.Decode -MaxPartitionDecode $partitionValues.Decode -OptimalPartitionDecode $partitionValues.Decode `
-        -MinPartitionCompute $partitionValues.Compute -MaxPartitionCompute $partitionValues.Compute -OptimalPartitionCompute $partitionValues.Compute
+        -MinPartitionCompute $partitionValues.Compute -MaxPartitionCompute $partitionValues.Compute -OptimalPartitionCompute $partitionValues.Compute `
+        -ErrorAction Stop
     Set-VM -VMName $VMName -GuestControlledCacheTypes $true -ErrorAction Stop
     Set-VM -VMName $VMName -LowMemoryMappedIoSpace 1GB -ErrorAction Stop
     Set-VM -VMName $VMName -HighMemoryMappedIoSpace 32GB -ErrorAction Stop
@@ -2111,6 +2112,7 @@ function New-LabeledControl {
         "NumericUpDown" { New-Object System.Windows.Forms.NumericUpDown }
         "CheckBox"      { New-Object System.Windows.Forms.CheckBox }
         "Label"         { $l = New-Object System.Windows.Forms.Label; $l.ForeColor = [System.Drawing.Color]::Cyan; $l }
+        default         { Write-Log "New-LabeledControl: unknown ControlType '$ControlType'" "WARN"; New-Object System.Windows.Forms.TextBox }
     }
     $ctrl.Location = New-Object System.Drawing.Point(($X + $effectiveLabelWidth), $Y)
     if ($ControlType -ne "CheckBox") { $ctrl.Width = $ControlWidth }
@@ -2457,6 +2459,8 @@ function Update-VMList {
         }
     }
 
+    $vmPanel.SuspendLayout()
+    try {
     $vmPanel.Controls.Clear()
     $checkboxes = @()
     $filterText = ""
@@ -2495,6 +2499,9 @@ function Update-VMList {
     $ctrlGPU["VMCheckboxes"] = $checkboxes
     if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
         Update-GpuActionState
+    }
+    } finally {
+        $vmPanel.ResumeLayout($true)
     }
 }
 Update-VMList
@@ -2727,15 +2734,19 @@ $btnSaveLog.FlatStyle  = 'Flat'
 $btnSaveLog.ForeColor  = [System.Drawing.Color]::White
 $btnSaveLog.Add_Click({
     $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
-    $saveDlg.Filter = "Log files (*.log)|*.log|Text files (*.txt)|*.txt|All files (*.*)|*.*"
-    $saveDlg.FileName = "HyperV-Toolkit_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-    if ($saveDlg.ShowDialog() -eq 'OK') {
-        try {
-            $script:LogBox.Text | Out-File -FilePath $saveDlg.FileName -Encoding UTF8 -Force
-            Write-Log "Log saved to: $($saveDlg.FileName)" "OK"
-        } catch {
-            Write-Log "Failed to save log: $($_.Exception.Message)" "ERROR"
+    try {
+        $saveDlg.Filter = "Log files (*.log)|*.log|Text files (*.txt)|*.txt|All files (*.*)|*.*"
+        $saveDlg.FileName = "HyperV-Toolkit_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+        if ($saveDlg.ShowDialog() -eq 'OK') {
+            try {
+                $script:LogBox.Text | Out-File -FilePath $saveDlg.FileName -Encoding UTF8 -Force
+                Write-Log "Log saved to: $($saveDlg.FileName)" "OK"
+            } catch {
+                Write-Log "Failed to save log: $($_.Exception.Message)" "ERROR"
+            }
         }
+    } finally {
+        $saveDlg.Dispose()
     }
 })
 $form.Controls.Add($btnSaveLog)
@@ -3266,8 +3277,12 @@ $form.Add_KeyDown({
 # ---- Browse VM Location ----
 $btnBrowseVM.Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = "Select the folder where VMs will be stored"
-    if ($dlg.ShowDialog() -eq 'OK') { $ctrlCreate["VMLocation"].Text = $dlg.SelectedPath }
+    try {
+        $dlg.Description = "Select the folder where VMs will be stored"
+        if ($dlg.ShowDialog() -eq 'OK') { $ctrlCreate["VMLocation"].Text = $dlg.SelectedPath }
+    } finally {
+        $dlg.Dispose()
+    }
 })
 
 # ---- Browse ISO + Detect Editions + Detect Version ----
@@ -3275,6 +3290,7 @@ $btnBrowseISO.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = "ISO Files|*.iso"
     $dlg.Title  = "Select a Windows Installation ISO"
+    try {
     if ($dlg.ShowDialog() -eq 'OK') {
         $ctrlCreate["ISOPath"].Text = $dlg.FileName
 
@@ -3312,6 +3328,9 @@ $btnBrowseISO.Add_Click({
             if (-not (Test-Path $script:WimFile)) { $script:WimFile = Join-Path "$isoDrive\sources" "install.esd" }
             if (-not (Test-Path $script:WimFile)) {
                 Write-Log "Cannot find install.wim or install.esd in ISO" "ERROR"
+                $script:WimFile = $null
+                $script:EditionMap = @{}
+                $ctrlCreate["Edition"].Items.Clear()
                 return
             }
 
@@ -3360,14 +3379,21 @@ $btnBrowseISO.Add_Click({
             Write-Log "Failed to read ISO: $_" "ERROR"
         }
     }
+    } finally {
+        $dlg.Dispose()
+    }
 })
 
 $btnBrowseGolden.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = "Virtual Hard Disk|*.vhdx;*.vhd"
-    $dlg.Title  = "Select parent Golden VHDX/VHD"
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $ctrlCreate["GoldenParentVHD"].Text = $dlg.FileName
+    try {
+        $dlg.Filter = "Virtual Hard Disk|*.vhdx;*.vhd"
+        $dlg.Title  = "Select parent Golden VHDX/VHD"
+        if ($dlg.ShowDialog() -eq 'OK') {
+            $ctrlCreate["GoldenParentVHD"].Text = $dlg.FileName
+        }
+    } finally {
+        $dlg.Dispose()
     }
 })
 
@@ -4575,7 +4601,7 @@ $btnUpdateGPU.Add_Click({
         $providerObj = $null
         $gpuVendor   = "Auto"
         if ($script:GpuPList.Count -gt 0) {
-            $providerObj = $script:GpuPList | Where-Object { $_.Friendly -eq $ctrlGPU["GpuSelector"].SelectedItem }
+            $providerObj = $script:GpuPList | Where-Object { $_.Friendly -eq $ctrlGPU["GpuSelector"].SelectedItem } | Select-Object -First 1
             if ($providerObj -and $providerObj.Provider) {
                 $gpuVendor = switch -Wildcard ($providerObj.Friendly) {
                     "*NVIDIA*" { "NVIDIA" }

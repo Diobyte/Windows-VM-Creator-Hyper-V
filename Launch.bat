@@ -31,7 +31,10 @@ if %errorLevel% neq 0 (
     exit /b
 )
 
-if /i "%~1"=="--elevated" shift
+if /i "%~1"=="--elevated" (
+    title Hyper-V Toolkit Launcher - Version 1 [Administrator]
+    shift
+)
 
 :: Change to script directory
 cd /d "%SCRIPT_DIR%"
@@ -41,6 +44,7 @@ echo  =============================================
 echo   Hyper-V Toolkit ^| Version 1 ^| Diobyte ^| Made with love
 echo  =============================================
 echo.
+echo  Script: %SCRIPT_PATH%
 echo  Launching toolkit...
 echo.
 

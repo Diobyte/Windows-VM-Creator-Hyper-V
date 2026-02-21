@@ -6,6 +6,13 @@ $script:ToolkitVersion = "Version 1"
 $script:ToolkitCreator = "Diobyte"
 $script:ToolkitTagline = "Made with love"
 
+# Startup banner (console feedback while GUI loads)
+Write-Host ""
+Write-Host "  =============================================" -ForegroundColor Cyan
+Write-Host "   Hyper-V Toolkit | $script:ToolkitVersion | $script:ToolkitCreator" -ForegroundColor Cyan
+Write-Host "  =============================================" -ForegroundColor Cyan
+Write-Host ""
+
 # Well-known Windows build numbers
 $script:BUILD_WIN10_RS4    = 17134   # Windows 10 1803 (earliest supported for modern Secure Boot)
 $script:BUILD_WIN10_RS5    = 17763   # Windows 10 1809 (Secure Boot recommended)
@@ -13,6 +20,7 @@ $script:BUILD_WIN10_MIN    = 10240   # Windows 10 RTM
 $script:BUILD_WIN11_MIN    = 22000   # Windows 11 21H2
 
 # Execution Policy
+Write-Host "  [1/7] Configuring execution policy..." -ForegroundColor DarkGray
 $currentPolicy = Get-ExecutionPolicy -Scope Process
 if (-not $currentPolicy -or $currentPolicy -in @('Undefined', 'Restricted')) {
     try {
@@ -23,12 +31,22 @@ if (-not $currentPolicy -or $currentPolicy -in @('Undefined', 'Restricted')) {
 }
 
 # Load assemblies
-Add-Type -AssemblyName PresentationFramework
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
+Write-Host "  [2/7] Loading assemblies..." -ForegroundColor DarkGray
+try {
+    Add-Type -AssemblyName PresentationFramework
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+} catch {
+    Write-Host "  FATAL: Failed to load .NET assemblies: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  Ensure .NET Framework 4.x or later is installed." -ForegroundColor Red
+    Write-Host "  Press Enter to exit..." -ForegroundColor Red
+    Read-Host
+    exit 1
+}
 
 # 64-bit process check
+Write-Host "  [3/7] Checking environment..." -ForegroundColor DarkGray
 if (-not [Environment]::Is64BitProcess) {
     [System.Windows.MessageBox]::Show(
         "This tool requires 64-bit PowerShell.`n`nDo not use PowerShell (x86). Use the standard PowerShell or the Launch.bat file.",
@@ -38,6 +56,7 @@ if (-not [Environment]::Is64BitProcess) {
 }
 
 # Admin check
+Write-Host "  [4/7] Verifying administrator privileges..." -ForegroundColor DarkGray
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
@@ -67,6 +86,7 @@ if (-not $isAdmin) {
 }
 
 # Hyper-V check
+Write-Host "  [5/7] Checking Hyper-V status (may take a moment)..." -ForegroundColor DarkGray
 function Test-HyperVRunning {
     try {
         $svc = Get-Service -Name vmms -ErrorAction Stop
@@ -74,7 +94,43 @@ function Test-HyperVRunning {
     } catch { return $false }
 }
 
-$feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue
+$feature = $null
+try {
+    $featureJob = Start-Job -ScriptBlock { Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue }
+    if (Wait-Job $featureJob -Timeout 30) {
+        $feature = Receive-Job $featureJob -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "    Hyper-V query is taking longer than expected..." -ForegroundColor Yellow
+        if (Wait-Job $featureJob -Timeout 60) {
+            $feature = Receive-Job $featureJob -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "    Hyper-V query timed out after 90s." -ForegroundColor Yellow
+            Stop-Job $featureJob -ErrorAction SilentlyContinue
+            if (Test-HyperVRunning) {
+                Write-Host "    vmms service is running - proceeding." -ForegroundColor Green
+                $feature = [PSCustomObject]@{ State = "Enabled" }
+            }
+        }
+    }
+    Remove-Job $featureJob -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-Host "    Async check failed, trying direct query..." -ForegroundColor Yellow
+    try {
+        $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue
+    } catch {
+        Write-Host "    Hyper-V check failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Handle pending-reboot state (Hyper-V enabled but restart not yet done)
+if ($feature -and $feature.State -eq "EnablePending") {
+    [System.Windows.MessageBox]::Show(
+        "Hyper-V has been enabled but requires a system restart.`n`nPlease restart your computer and then run the toolkit again.",
+        "Restart Required", "OK", "Warning"
+    ) | Out-Null
+    exit 0
+}
+
 if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning))) {
     $installChoice = [System.Windows.MessageBox]::Show(
         "Hyper-V is not fully enabled or the hypervisor is not running.`n`nA system restart will be required after installation.`n`nDo you want to enable it now?",
@@ -107,6 +163,7 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
     } else { exit 0 }
 }
 
+Write-Host "  [6/7] Detecting host configuration..." -ForegroundColor DarkGray
 # Detect host OS
 $script:HostOsName = (Get-CimInstance Win32_OperatingSystem).Caption
 $script:HostBuild  = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuild
@@ -1411,6 +1468,8 @@ function Set-GpuPartitionForVM {
 #endregion
 
 #region ==================== GUI CONSTRUCTION ====================
+
+Write-Host "  [7/7] Building interface..." -ForegroundColor DarkGray
 
 # ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
@@ -3502,6 +3561,16 @@ Write-Log "Host OS: $($script:HostOsName)" "INFO"
 Write-Log "GPU-P Specific GPU Selection: $(if ($script:SupportsGpuInstancePath) {'Available'} else {'Not available on this host build'})" "INFO"
 Write-Log "Ready." "OK"
 
-[void]$form.ShowDialog()
+Write-Host "  Startup complete." -ForegroundColor Green
+Write-Host ""
+
+try {
+    [void]$form.ShowDialog()
+} catch {
+    Write-Host "`n  FATAL: GUI error: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  $($_.ScriptStackTrace)" -ForegroundColor DarkRed
+    Write-Host "`n  Press Enter to exit..." -ForegroundColor Red
+    Read-Host
+}
 
 #endregion

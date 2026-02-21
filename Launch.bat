@@ -98,6 +98,7 @@ if /i "%~1"=="--elevated" (
     title Hyper-V Toolkit Launcher  [Administrator]
     call :log "Running elevated launcher instance"
     shift
+    set "USER_ARGS=%*"
 )
 
 cd /d "%SCRIPT_DIR%"
@@ -123,7 +124,7 @@ echo.
 :: ----------------------------------------------------------------
 call :log "Launching toolkit (hidden console)"
 "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden ^
-    -File "%SCRIPT_PATH%" %*
+    -File "%SCRIPT_PATH%" %USER_ARGS%
 
 set "LAUNCH_EXIT_CODE=%ERRORLEVEL%"
 call :log "Toolkit exited with code: %LAUNCH_EXIT_CODE%"

@@ -8,6 +8,32 @@ param(
     [switch]$WhatIf
 )
 
+$script:CliVMName = $VMName
+$script:CliISOPath = $ISOPath
+$script:CliHeadless = [bool]$Headless
+$script:CliWhatIf = [bool]$WhatIf
+
+# Preserve explicitly passed startup arguments when we relaunch/elevate.
+$script:ForwardedCliArgs = @()
+if ($PSBoundParameters.ContainsKey('VMName') -and -not [string]::IsNullOrWhiteSpace($VMName)) {
+    $script:ForwardedCliArgs += @('-VMName', $VMName)
+}
+if ($PSBoundParameters.ContainsKey('ISOPath') -and -not [string]::IsNullOrWhiteSpace($ISOPath)) {
+    $script:ForwardedCliArgs += @('-ISOPath', $ISOPath)
+}
+if ($PSBoundParameters.ContainsKey('Headless') -and $Headless) {
+    $script:ForwardedCliArgs += '-Headless'
+}
+if ($PSBoundParameters.ContainsKey('WhatIf') -and $WhatIf) {
+    $script:ForwardedCliArgs += '-WhatIf'
+}
+
+if ($script:CliHeadless) {
+    Write-Host "Headless mode is not implemented in this version of HyperV-Toolkit." -ForegroundColor Yellow
+    Write-Host "Use GUI mode, or remove -Headless and run interactively." -ForegroundColor Yellow
+    exit 1
+}
+
 # Use strict mode to catch variable issues
 Set-StrictMode -Version Latest
 
@@ -78,7 +104,7 @@ if ($PSVersionTable.PSEdition -ne 'Desktop') {
                 '-ExecutionPolicy', 'Bypass',
                 '-Sta',
                 '-File', $scriptPath
-            ) | Out-Null
+            ) + $script:ForwardedCliArgs | Out-Null
             Write-StartupTrace -Message "Relaunch command sent successfully"
             exit 0
         } catch {
@@ -147,7 +173,7 @@ if (-not $isAdmin) {
                 '-ExecutionPolicy', 'RemoteSigned',
                 '-Sta',
                 '-File', $scriptPath
-            ) | Out-Null
+            ) + $script:ForwardedCliArgs | Out-Null
             Write-StartupTrace -Message "Elevation command sent successfully"
             exit 0
         } catch {
@@ -922,8 +948,9 @@ function Update-CreateProgress {
         $ctrlCreate["CreateStatus"].Text = $Status
         $ctrlCreate["CreateStatus"].Refresh()
     }
-    # Pump the Windows message queue so the UI stays responsive during long sync operations
-    # DoEvents removed - can cause reentrancy issues in event handlers
+    # Keep UI responsive during long sync operations. Re-entrancy-sensitive actions are
+    # already guarded by $script:IsCreating / $script:IsUpdatingGPU flags.
+    try { [System.Windows.Forms.Application]::DoEvents() } catch { }
 }
 
 function Remove-PartialVmArtifacts {
@@ -1602,12 +1629,28 @@ function Invoke-DismApplyImage {
             Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
 
             # Clean up partially applied image to avoid corrupt state on retry.
-            # Always remove the *contents* (not the directory itself) so drive-root targets like E:\ are handled safely.
+            # Guard aggressively against destructive deletions on non-target/system roots.
             if (Test-Path $ApplyDir) {
-                Write-Log "Cleaning up partial DISM image at $ApplyDir before retry..." "WARN"
-                Get-ChildItem -Path $ApplyDir -Force -ErrorAction SilentlyContinue |
-                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Log "Partial image cleanup complete." "WARN"
+                $applyRoot = [System.IO.Path]::GetPathRoot($ApplyDir)
+                $isDriveRoot = ($applyRoot -and (($ApplyDir.TrimEnd('\\') + '\\') -ieq $applyRoot))
+                $windowsDir = Join-Path $ApplyDir 'Windows'
+                $efiMarker = Join-Path $ApplyDir 'EFI'
+                $bootMarker = Join-Path $ApplyDir 'boot'
+                $safeCleanupRoot = ($isDriveRoot -and (Test-Path $windowsDir) -and ((Test-Path $efiMarker) -or (Test-Path $bootMarker)))
+                $systemRoot = [System.IO.Path]::GetPathRoot($env:SystemRoot)
+
+                if ($safeCleanupRoot -and ($applyRoot -ine $systemRoot)) {
+                    Write-Log "Cleaning up known Windows install paths in $ApplyDir before retry..." "WARN"
+                    foreach ($rel in @('Windows','Program Files','Program Files (x86)','ProgramData','Users','PerfLogs','Recovery','boot','Boot','EFI')) {
+                        $target = Join-Path $ApplyDir $rel
+                        if (Test-Path $target) {
+                            Remove-Item -Path $target -Recurse -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    Write-Log "Partial image cleanup complete." "WARN"
+                } else {
+                    Write-Log "Skipping destructive cleanup for '$ApplyDir' because safety checks did not pass." "WARN"
+                }
             }
             continue
         }
@@ -1811,7 +1854,7 @@ function New-UnattendXml {
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="offlineServicing">
     <component name="Microsoft-Windows-LUA-Settings" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <EnableLUA>false</EnableLUA>
+            <EnableLUA>true</EnableLUA>
     </component>
   </settings>
 
@@ -1829,7 +1872,7 @@ function New-UnattendXml {
       <UserData>
         <AcceptEula>true</AcceptEula>
       </UserData>
-      <EnableFirewall>false</EnableFirewall>
+            <EnableFirewall>true</EnableFirewall>
       <Diagnostics>
         <OptIn>false</OptIn>
       </Diagnostics>
@@ -2260,6 +2303,10 @@ function Copy-GpuDriverFolders {
 
     # Check available space
     $freeSpace = (Get-Volume -DriveLetter $MountLetter[0] -ErrorAction SilentlyContinue).SizeRemaining
+    if ($null -eq $freeSpace -or $freeSpace -le 0) {
+        Write-Log "[$VMName] Could not determine free space for mounted VHD volume '$MountLetter'." "ERROR"
+        return @{ Success = $false; MountLetter = $MountLetter }
+    }
     Write-Log "[$VMName] VHD free space: $([math]::Round($freeSpace / 1GB, 2)) GB"
 
     if ($totalSize -gt ($freeSpace - 1GB)) {
@@ -2315,6 +2362,10 @@ function Copy-GpuDriverFolders {
             }
 
             $freeSpace = (Get-Volume -DriveLetter $MountLetter[0] -ErrorAction SilentlyContinue).SizeRemaining
+            if ($null -eq $freeSpace -or $freeSpace -le 0) {
+                Write-Log "[$VMName] Could not determine free space after VHD expansion." "ERROR"
+                return @{ Success = $false; MountLetter = $MountLetter }
+            }
             Write-Log "[$VMName] New free space: $([math]::Round($freeSpace / 1GB, 2)) GB"
 
             if ($totalSize -gt ($freeSpace - 1GB)) {
@@ -3673,7 +3724,7 @@ $toolTip.SetToolTip($ctrlCreate["Parsec"], "Downloads and installs Parsec silent
 $toolTip.SetToolTip($ctrlCreate["VBCable"], "Installs VB-Audio virtual cable to route virtual audio devices in the guest. Good for streaming/remote desktop audio workflows.")
 $toolTip.SetToolTip($ctrlCreate["USBMMIDD"], "Installs a virtual display driver to provide a persistent headless display target in remote sessions.")
 $toolTip.SetToolTip($ctrlCreate["RDP"], "Enables Remote Desktop and firewall rules in the guest after setup.")
-$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a Desktop\share folder inside the guest with Everyone:FullControl access. Suitable for dev/lab VMs only - do not use on internet-exposed or production VMs.")
+$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a Desktop\share folder inside the guest for the current local user and Administrators. Suitable for dev/lab VMs only - do not use on internet-exposed or production VMs.")
 $toolTip.SetToolTip($ctrlCreate["PauseUpdate"], "Pauses Windows Updates for an extended period after deployment. Useful for preserving known-good driver states.")
 $toolTip.SetToolTip($ctrlCreate["FullUpdate"], "Runs a full Windows Update sequence at first logon using PSWindowsUpdate (can take significant time and may reboot).")
 $toolTip.SetToolTip($ctrlCreate["NestedVirt"], "Exposes virtualization extensions to the guest so it can run Hyper-V/WSL2/other nested hypervisors.")
@@ -3782,7 +3833,7 @@ $btnBrowseISO.Add_Click({
 
         try {
             Write-Log "Mounting ISO: $($dlg.FileName)"
-            $script:MountedISO = Mount-DiskImage -ImagePath $dlg.FileName -PassThru
+            $script:MountedISO = Mount-DiskImage -ImagePath $dlg.FileName -PassThru -ErrorAction Stop
             Register-TrackedMountedImage -ImagePath $dlg.FileName
 
             # Poll for a drive letter (up to ~10 s) instead of a fixed sleep
@@ -4499,6 +4550,12 @@ $btnCreateVM.Add_Click({
         Write-Log "Preflight Profile:" "INFO"
         foreach ($line in $preflightLines) { Write-Log "  $line" "INFO" }
 
+        if ($script:CliWhatIf) {
+            Write-Log "WhatIf mode: preflight completed. No VM changes will be made." "WARN"
+            Update-CreateProgress -Percent 100 -Status "WhatIf complete: no changes were applied."
+            return
+        }
+
         # ---- Host/VM version match check ----
         if ($effectiveDetectedBuild -gt 0 -and $script:HostBuild -gt 0) {
             if ([math]::Abs($effectiveDetectedBuild - $script:HostBuild) -gt 5000) {
@@ -4517,8 +4574,7 @@ $btnCreateVM.Add_Click({
         Write-Log "Secure Boot: $EnableSecureBoot | TPM: $EnableTPM" "INFO"
         Write-Log "========================================" "INFO"
         if (-not $UseGoldenImage) {
-            Write-Log "  Note: UAC (EnableLUA) is disabled in the unattend XML to allow automated first-boot setup. Re-enable via 'User Account Control Settings' after provisioning if required by policy." "WARN"
-            Write-Log "  Note: Windows Firewall is suppressed only during the WindowsPE (setup) phase and returns to OS defaults once first-boot completes." "INFO"
+            Write-Log "  Security baseline: UAC and Windows Firewall remain enabled in unattend defaults." "INFO"
         }
 
         # ---- Disable AutoPlay ----
@@ -4663,10 +4719,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 'echo @echo off > C:\Windows\Temp\CreateShare.cmd'
                 'echo set "SHAREFOLDER=%%USERPROFILE%%\Desktop\share" >> C:\Windows\Temp\CreateShare.cmd'
                 'echo if not exist "%%SHAREFOLDER%%" mkdir "%%SHAREFOLDER%%" >> C:\Windows\Temp\CreateShare.cmd'
-                'echo icacls "%%SHAREFOLDER%%" /grant Everyone:(OI)(CI)F /T >> C:\Windows\Temp\CreateShare.cmd'
+                'echo icacls "%%SHAREFOLDER%%" /inheritance:r /grant:r "%%USERNAME%%:(OI)(CI)M" "Administrators:(OI)(CI)F" /T >> C:\Windows\Temp\CreateShare.cmd'
                 'echo powershell -Command "Set-NetFirewallRule -DisplayGroup ''File and Printer Sharing'' -Enabled True" >> C:\Windows\Temp\CreateShare.cmd'
-                'echo powershell -Command "if (Get-SmbShare -Name ''share'' -ErrorAction SilentlyContinue) { Remove-SmbShare -Name ''share'' -Force }" >> C:\Windows\Temp\CreateShare.cmd'
-                'echo powershell -Command "New-SmbShare -Name ''share'' -Path ''%%USERPROFILE%%\Desktop\share'' -FullAccess ''Everyone''" >> C:\Windows\Temp\CreateShare.cmd'
+                'echo net share share /delete /y ^>nul 2^>nul >> C:\Windows\Temp\CreateShare.cmd'
+                'echo net share share="%%USERPROFILE%%\Desktop\share" /grant:%%USERNAME%%,FULL /grant:Administrators,FULL >> C:\Windows\Temp\CreateShare.cmd'
                 'echo exit >> C:\Windows\Temp\CreateShare.cmd'
                 ''
             )
@@ -4683,7 +4739,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- Full Windows Updates at first logon ---'
                 'reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v RunUpdates /d "cmd /c C:\Windows\Temp\RunUpdates.cmd" /f'
                 'echo @echo off > C:\Windows\Temp\RunUpdates.cmd'
-                'echo powershell -NoProfile -Command "try { Install-PackageProvider -Name NuGet -Force; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module PSWindowsUpdate -Force -Scope AllUsers; Import-Module PSWindowsUpdate; Add-WUServiceManager -MicrosoftUpdate -Confirm:$false -ErrorAction SilentlyContinue; Get-WindowsUpdate -MicrosoftUpdate -Install -AcceptAll -IgnoreReboot | Out-File -FilePath C:\\Windows\\Temp\\WUOutput.log -Encoding UTF8; } catch { Write-Output $_.Exception.Message }" >> C:\Windows\Temp\RunUpdates.cmd'
+                'echo powershell -NoProfile -Command "try { Install-PackageProvider -Name NuGet -Force; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; if (-not (Get-PSRepository -Name ''PSGallery'' -ErrorAction SilentlyContinue)) { throw ''PSGallery repository not found'' }; Set-PSRepository -Name ''PSGallery'' -InstallationPolicy Trusted; Install-Module PSWindowsUpdate -Repository PSGallery -RequiredVersion 2.2.1.5 -Force -Scope AllUsers; $mod = Get-Module -ListAvailable -Name PSWindowsUpdate | Sort-Object Version -Descending | Select-Object -First 1; if (-not $mod) { throw ''PSWindowsUpdate module missing after install'' }; $sig = Get-AuthenticodeSignature (Join-Path $mod.ModuleBase ''PSWindowsUpdate.psd1''); if ($sig.Status -ne ''Valid'') { throw ''PSWindowsUpdate signature validation failed'' }; Import-Module PSWindowsUpdate -RequiredVersion 2.2.1.5 -Force; Add-WUServiceManager -MicrosoftUpdate -Confirm:$false -ErrorAction SilentlyContinue; Get-WindowsUpdate -MicrosoftUpdate -Install -AcceptAll -IgnoreReboot | Out-File -FilePath C:\\Windows\\Temp\\WUOutput.log -Encoding UTF8; } catch { Write-Output $_.Exception.Message }" >> C:\Windows\Temp\RunUpdates.cmd'
                 'echo shutdown /r /t 30 /c "Windows Updates complete. Rebooting in 30 seconds." >> C:\Windows\Temp\RunUpdates.cmd'
                 'echo exit >> C:\Windows\Temp\RunUpdates.cmd'
                 ''
@@ -5076,6 +5132,27 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         # Enhanced Session
         if ($EnableEnhancedSession) {
             try {
+                $enableEnhancedSession = $true
+                try {
+                    $hostInfo = Get-VMHost -ErrorAction Stop
+                    if ($hostInfo -and -not $hostInfo.EnableEnhancedSessionMode) {
+                        $confirmEnhancedSession = [System.Windows.Forms.MessageBox]::Show(
+                            "Enhanced Session mode is a host-wide setting and affects all VMs on this host.`n`nEnable host Enhanced Session mode now?",
+                            "Confirm Host-Wide Change",
+                            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                            [System.Windows.Forms.MessageBoxIcon]::Warning)
+                        if ($confirmEnhancedSession -ne [System.Windows.Forms.DialogResult]::Yes) {
+                            $enableEnhancedSession = $false
+                            Write-Log "  Enhanced Session: skipped host-wide change by user choice." "WARN"
+                        }
+                    }
+                } catch {
+                    Write-Log "  Enhanced Session pre-check warning: $($_.Exception.Message)" "WARN"
+                }
+
+                if (-not $enableEnhancedSession) {
+                    throw "Enhanced Session host-wide change was not approved"
+                }
                 Set-VMHost -EnableEnhancedSessionMode $true -ErrorAction Stop
                 Write-Log "  Enhanced Session: Enabled on host" "OK"
             } catch {
@@ -5325,6 +5402,11 @@ $btnUpdateGPU.Add_Click({
         $hostNvidiaBranch = Get-DriverVersionBranch -VersionString $hostNvidiaVersion
         if ($hostNvidiaVersion) {
             Write-Log "Host NVIDIA driver version detected: $hostNvidiaVersion (branch $hostNvidiaBranch)" "INFO"
+        }
+
+        if ($script:CliWhatIf) {
+            Write-Log "WhatIf mode: GPU update preflight complete. No VM GPU/driver changes will be made." "WARN"
+            return
         }
 
         # Disable UI
@@ -5674,6 +5756,21 @@ $form.Add_FormClosing({
 Write-Log "Hyper-V Toolkit $($script:ToolkitVersion) by $($script:ToolkitCreator) - $($script:ToolkitTagline)" "OK"
 Write-Log "Host OS: $($script:HostOsName)" "INFO"
 Write-Log "GPU-P Specific GPU Selection: $(if ($script:SupportsGpuInstancePath) {'Available'} else {'Not available on this host build'})" "INFO"
+if (-not [string]::IsNullOrWhiteSpace($script:CliVMName)) {
+    $ctrlCreate["VMName"].Text = $script:CliVMName.Trim()
+    Write-Log "CLI prefill: VM Name set from parameter." "INFO"
+}
+if (-not [string]::IsNullOrWhiteSpace($script:CliISOPath)) {
+    $ctrlCreate["ISOPath"].Text = $script:CliISOPath.Trim()
+    if (Test-Path $script:CliISOPath) {
+        Write-Log "CLI prefill: ISO path set from parameter. Use Browse ISO to load editions and mount source." "INFO"
+    } else {
+        Write-Log "CLI prefill warning: provided ISO path does not exist: $script:CliISOPath" "WARN"
+    }
+}
+if ($script:CliWhatIf) {
+    Write-Log "WhatIf mode is enabled: creation/GPU actions will run preflight only and skip host/guest changes." "WARN"
+}
 Write-Log "Ready." "OK"
 
 Write-Host "  Startup complete." -ForegroundColor Green

@@ -389,7 +389,7 @@ function Test-DirectoryWritable {
     }
 }
 
-function Ensure-ToolkitNatSwitch {
+function Set-ToolkitNatSwitch {
     param(
         [string]$SwitchName = "HyperV-Toolkit-NAT",
         [string]$GatewayIp = "192.168.250.1",
@@ -796,7 +796,7 @@ function Resolve-GuestWindowsProfile {
     }
 }
 
-function Apply-DetectedGuestDefaults {
+function Set-DetectedGuestDefaults {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Controls,
         [Parameter(Mandatory = $true)]$Profile,
@@ -1349,11 +1349,13 @@ function Set-GpuPartitionForVM {
 # ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text              = "Hyper-V Toolkit • Version 1 • Diobyte • Made with love"
-$form.Size              = New-Object System.Drawing.Size(1240, 790)
-$form.FormBorderStyle   = 'FixedSingle'
-$form.MaximizeBox       = $false
+$form.Size              = New-Object System.Drawing.Size(1300, 860)
+$form.MinimumSize       = New-Object System.Drawing.Size(1240, 820)
+$form.FormBorderStyle   = 'Sizable'
+$form.MaximizeBox       = $true
 $form.StartPosition     = "CenterScreen"
 $form.Font              = New-Object System.Drawing.Font("Segoe UI", 9.75)
+$form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.BackColor         = [System.Drawing.Color]::FromArgb(24, 26, 31)
 $form.ForeColor         = [System.Drawing.Color]::White
 $form.Padding           = New-Object System.Windows.Forms.Padding(6)
@@ -1386,11 +1388,11 @@ $tabControl.SizeMode   = [System.Windows.Forms.TabSizeMode]::Fixed
 $tabControl.Padding    = New-Object System.Drawing.Point(14, 4)
 $tabControl.BackColor  = $theme.Card
 $tabControl.Add_DrawItem({
-    param($sender, $e)
-    if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $sender.TabPages.Count) { return }
+    param($tabSender, $e)
+    if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabSender.TabPages.Count) { return }
 
     $isSelected = ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -eq [System.Windows.Forms.DrawItemState]::Selected
-    $tabPage = $sender.TabPages[$e.Index]
+    $tabPage = $tabSender.TabPages[$e.Index]
     $rect = $e.Bounds
 
     $bg = if ($isSelected) { $theme.Accent } else { $theme.Surface }
@@ -1403,7 +1405,7 @@ $tabControl.Add_DrawItem({
     [System.Windows.Forms.TextRenderer]::DrawText(
         $e.Graphics,
         $tabText,
-        $sender.Font,
+        $tabSender.Font,
         $rect,
         $fg,
         [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
@@ -1560,7 +1562,7 @@ $ctrlCreate["Resolution"] = New-LabeledControl $grpConfig 12 $rowY "Resolution:"
 $ctrlCreate["Resolution"].SelectedItem = "1920x1080"
 $rowY += 30
 
-$ctrlCreate["CheckpointMode"] = New-LabeledControl $grpConfig 12 $rowY "Checkpoint Mode:" -ControlType ComboBox -ControlWidth 150
+$ctrlCreate["CheckpointMode"] = New-LabeledControl $grpConfig 12 $rowY "Checkpoint Mode:" -LabelWidth 135 -ControlType ComboBox -ControlWidth 150
 @("Disabled","Production","ProductionOnly","Standard") | ForEach-Object { [void]$ctrlCreate["CheckpointMode"].Items.Add($_) }
 $ctrlCreate["CheckpointMode"].SelectedItem = "Disabled"
 $rowY += 30
@@ -2014,6 +2016,40 @@ $btnExit.ForeColor = [System.Drawing.Color]::White
 $btnExit.Add_Click({ $form.Close() })
 $form.Controls.Add($btnExit)
 
+# ---- Adaptive main layout (DPI/resolution friendly) ----
+$tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+
+function Update-MainLayout {
+    param([System.Windows.Forms.Form]$RootForm)
+
+    if (-not $RootForm) { return }
+
+    $margin = 10
+    $rightButtonColWidth = 85
+    $rightButtonGap = 10
+    $buttonStackGap = 35
+
+    $tabWidth = [Math]::Max(900, $RootForm.ClientSize.Width - 2 * $margin)
+    $tabHeight = [Math]::Max(490, [Math]::Min(560, $RootForm.ClientSize.Height - 300))
+    $tabControl.Location = New-Object System.Drawing.Point($margin, 8)
+    $tabControl.Size = New-Object System.Drawing.Size($tabWidth, $tabHeight)
+
+    $logY = $tabControl.Bottom + 7
+    $buttonX = [Math]::Max($margin + 600, $RootForm.ClientSize.Width - $rightButtonColWidth - $margin)
+    $logWidth = [Math]::Max(500, $buttonX - $margin - $rightButtonGap)
+    $logHeight = [Math]::Max(120, $RootForm.ClientSize.Height - $logY - $margin)
+
+    $script:LogBox.Location = New-Object System.Drawing.Point($margin, $logY)
+    $script:LogBox.Size = New-Object System.Drawing.Size($logWidth, $logHeight)
+
+    $btnClearLog.Location = New-Object System.Drawing.Point($buttonX, $logY)
+    $btnSaveLog.Location = New-Object System.Drawing.Point($buttonX, ($logY + $buttonStackGap))
+    $btnExit.Location = New-Object System.Drawing.Point($buttonX, ($logY + 2 * $buttonStackGap))
+}
+
+$form.Add_Shown({ Update-MainLayout -RootForm $form })
+$form.Add_Resize({ Update-MainLayout -RootForm $form })
+
 # ---- Modern UI styling helpers ----
 function Set-ButtonHover {
     param(
@@ -2022,18 +2058,32 @@ function Set-ButtonHover {
         [System.Drawing.Color]$Hover
     )
     if (-not $Button) { return }
-    $Button.BackColor = $Normal
+
+    $normalColor = $Normal
+    $hoverColor = $Hover
+    if ($normalColor -eq $null -or $normalColor.IsEmpty) { $normalColor = [System.Drawing.SystemColors]::ControlDarkDark }
+    if ($hoverColor -eq $null -or $hoverColor.IsEmpty) { $hoverColor = $normalColor }
+
+    $Button.BackColor = $normalColor
     $Button.FlatStyle = 'Flat'
     $Button.FlatAppearance.BorderSize = 1
-    $Button.FlatAppearance.BorderColor = $theme.Border
-    $Button.FlatAppearance.MouseDownBackColor = $Hover
-    $Button.FlatAppearance.MouseOverBackColor = $Hover
+    $Button.FlatAppearance.BorderColor = if ($theme.Border) { $theme.Border } else { $normalColor }
+    $Button.FlatAppearance.MouseDownBackColor = $hoverColor
+    $Button.FlatAppearance.MouseOverBackColor = $hoverColor
     $Button.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $Button.Add_MouseEnter({ $this.BackColor = $Hover })
-    $Button.Add_MouseLeave({ $this.BackColor = $Normal })
+    $Button.Add_MouseEnter({
+        if (-not $hoverColor.IsEmpty) {
+            $this.BackColor = $hoverColor
+        }
+    }.GetNewClosure())
+    $Button.Add_MouseLeave({
+        if (-not $normalColor.IsEmpty) {
+            $this.BackColor = $normalColor
+        }
+    }.GetNewClosure())
 }
 
-function Apply-ModernTheme {
+function Set-ModernTheme {
     param([System.Windows.Forms.Control]$Root)
 
     foreach ($control in $Root.Controls) {
@@ -2086,7 +2136,7 @@ function Apply-ModernTheme {
         }
 
         if ($control.HasChildren) {
-            Apply-ModernTheme -Root $control
+            Set-ModernTheme -Root $control
         }
     }
 }
@@ -2105,7 +2155,7 @@ Set-ButtonHover -Button $btnSelectNone -Normal $theme.Surface -Hover $theme.Bord
 Set-ButtonHover -Button $btnRefreshVMs -Normal $theme.Surface -Hover $theme.Border
 Set-ButtonHover -Button $btnClearVmSearch -Normal $theme.Surface -Hover $theme.Border
 
-Apply-ModernTheme -Root $form
+Set-ModernTheme -Root $form
 
 # Keyboard-first behavior: Enter runs primary action for active tab
 $form.CancelButton = $btnExit
@@ -2212,7 +2262,7 @@ $btnBrowseISO.Add_Click({
                 $script:DetectedBuild      = $versionInfo.Build
 
                 $detectedProfile = Resolve-GuestWindowsProfile -DetectedWinVersion $script:DetectedWinVersion -DetectedBuild $script:DetectedBuild
-                Apply-DetectedGuestDefaults -Controls $ctrlCreate -Profile $detectedProfile -EmitLog
+                Set-DetectedGuestDefaults -Controls $ctrlCreate -Profile $detectedProfile -EmitLog
 
                 # Auto-suggest VM name from ISO filename
                 if ([string]::IsNullOrWhiteSpace($ctrlCreate["VMName"].Text)) {
@@ -2279,7 +2329,7 @@ $ctrlCreate["Edition"].Add_SelectedIndexChanged({
         $script:DetectedWinVersion = $versionInfo.WinVersion
         $script:DetectedBuild      = $versionInfo.Build
         $detectedProfile = Resolve-GuestWindowsProfile -DetectedWinVersion $script:DetectedWinVersion -DetectedBuild $script:DetectedBuild
-        Apply-DetectedGuestDefaults -Controls $ctrlCreate -Profile $detectedProfile
+        Set-DetectedGuestDefaults -Controls $ctrlCreate -Profile $detectedProfile
     }
 })
 
@@ -2455,7 +2505,7 @@ $btnCreateVM.Add_Click({
                 return
             }
 
-            $createdSwitch = Ensure-ToolkitNatSwitch
+            $createdSwitch = Set-ToolkitNatSwitch
             if (-not $createdSwitch) {
                 Write-Log "Could not auto-create a fallback virtual switch." "ERROR"
                 return

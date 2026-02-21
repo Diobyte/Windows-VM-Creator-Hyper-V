@@ -1081,9 +1081,9 @@ function Set-VMGuestSecureBoot {
     $templates = $TemplateOrder
     if (-not $templates -or $templates.Count -eq 0) {
         $templates = if ($GuestIsWindows11) {
-            @('MicrosoftUEFICertificateAuthority', 'MicrosoftWindows')
+            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
         } elseif ($GuestBuild -gt 0 -and $GuestBuild -lt $script:BUILD_WIN10_RS4) {
-            @('MicrosoftUEFICertificateAuthority', 'MicrosoftWindows')
+            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
         } else {
             @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
         }
@@ -1567,7 +1567,7 @@ function Resolve-GuestWindowsProfile {
         DefaultSecureBoot       = $defaultSecureBoot
         DefaultTPM              = $defaultTPM
         SecureBootTemplateOrder = if ($isWin11 -or $isLegacyWin10) {
-            @('MicrosoftUEFICertificateAuthority', 'MicrosoftWindows')
+            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
         } else {
             @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
         }
@@ -3177,7 +3177,7 @@ $grpBoot.Anchor   = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Window
 
 $chkBootY = 26
 foreach ($chkDef in @(
-    @{ Key = "SecureBoot"; Text = "Secure Boot  (auto: ON for Win11, OFF for Win10)"; Default = $true  },
+    @{ Key = "SecureBoot"; Text = "Secure Boot  (auto: ON for Win11 and modern Win10)"; Default = $true  },
     @{ Key = "TPM";        Text = "Virtual TPM  (required for Windows 11)";            Default = $true  },
     @{ Key = "VHDType";    Text = "Fixed-size VHD  (default: dynamic / expanding)";   Default = $false }
 )) {
@@ -4721,7 +4721,7 @@ $btnCreateVM.Add_Click({
             } else {
                 $guestProfile.IsLegacyWindows10 = $true
                 $guestProfile.PreferCompactApply = $false
-                $guestProfile.SecureBootTemplateOrder = @('MicrosoftUEFICertificateAuthority', 'MicrosoftWindows')
+                $guestProfile.SecureBootTemplateOrder = @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
                 $guestProfile.CompatibilityNote = "Strict Legacy Mode enabled: forcing legacy-safe image apply and secure boot template order."
             }
         }
@@ -5897,6 +5897,23 @@ assign letter=$freeLetter
             if (Start-VMWithRetry -VMName $VMName -MaxRetries 2) {
                 $vmStarted = $true
                 Write-Log "VM started." "OK"
+            } elseif ($EnableSecureBoot) {
+                Write-Log "VM start failed with Secure Boot enabled. Retrying with alternate Secure Boot template order..." "WARN"
+                $altTemplateOrder = @('MicrosoftUEFICertificateAuthority', 'MicrosoftWindows')
+                if ($guestProfile -and $guestProfile.SecureBootTemplateOrder -and ($guestProfile.SecureBootTemplateOrder -join '|') -eq ($altTemplateOrder -join '|')) {
+                    $altTemplateOrder = @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
+                }
+
+                if (Set-VMGuestSecureBoot -VMName $VMName -EnableSecureBoot $true -GuestIsWindows11 $IsWin11 -GuestBuild $guestProfile.Build -TemplateOrder $altTemplateOrder) {
+                    if (Start-VMWithRetry -VMName $VMName -MaxRetries 1) {
+                        $vmStarted = $true
+                        Write-Log "VM started after Secure Boot template fallback." "OK"
+                    } else {
+                        Write-Log "VM still failed to start after Secure Boot template fallback. Try disabling Secure Boot for this image or review firmware template manually." "WARN"
+                    }
+                } else {
+                    Write-Log "Secure Boot template fallback could not be applied." "WARN"
+                }
             }
         }
 

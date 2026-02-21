@@ -198,6 +198,22 @@ if ($feature -and $feature.State -eq "EnablePending") {
 }
 
 if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning))) {
+    $skipInstall = $false
+    # If Hyper-V feature is enabled but vmms service is simply stopped, try starting it first
+    if ($feature -and $feature.State -eq "Enabled" -and -not (Test-HyperVRunning)) {
+        Write-Host "    Hyper-V is enabled but vmms service is not running. Attempting to start..." -ForegroundColor Yellow
+        try {
+            Start-Service vmms -ErrorAction Stop
+            Start-Sleep -Seconds 3
+            if (Test-HyperVRunning) {
+                Write-Host "    vmms service started successfully." -ForegroundColor Green
+                $skipInstall = $true
+            }
+        } catch {
+            Write-Host "    Could not start vmms service: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    if (-not $skipInstall) {
     $installChoice = [System.Windows.MessageBox]::Show(
         "Hyper-V is not fully enabled or the hypervisor is not running.`n`nA system restart will be required after installation.`n`nDo you want to enable it now?",
         "Enable Hyper-V", "OKCancel", "Warning"
@@ -205,6 +221,7 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
     if ($installChoice -eq "OK") {
         try {
             Enable-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -All -NoRestart -ErrorAction Stop *> $null
+            $Global:LASTEXITCODE = 0
             bcdedit /set hypervisorlaunchtype auto *> $null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "    Warning: bcdedit returned exit code $LASTEXITCODE" -ForegroundColor Yellow
@@ -230,6 +247,7 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
             exit 1
         }
     } else { exit 0 }
+    } # end if (-not $skipInstall)
 }
 
 Write-Host "  [6/7] Detecting host configuration..." -ForegroundColor DarkGray
@@ -275,7 +293,7 @@ $script:LastLogRefresh      = [DateTime]::MinValue  # Rate-limit LogBox.Refresh(
 $script:LogRefreshIntervalMs = 100                  # Minimum ms between log repaints
 $script:LogMaxLength        = 200000                # Trim log when exceeding ~200KB
 $script:PathCache           = @{}                   # Test-Path cache: path → [result, DateTime]
-$script:PathCacheTtlMs      = 2000                  # Cache TTL for Test-PathCached
+$script:PathCacheTtlMs      = 5000                  # Cache TTL for Test-PathCached (5s to reduce I/O on slow paths)
 $script:NvidiaDllPatterns   = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
                                 'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
                                 'nvwgf2*.dll','nvidia*.dll')  # NVIDIA System32 DLL patterns (shared)
@@ -1038,9 +1056,13 @@ function ConvertTo-UnattendArchitecture {
     if ([string]::IsNullOrWhiteSpace($Architecture)) { return "" }
 
     switch -Regex ($Architecture.Trim().ToLowerInvariant()) {
-        '^(amd64|x64)$'      { return 'amd64' }
-        '^(arm64|aarch64)$'  { return 'arm64' }
-        default              { return "" }
+        '^(amd64|x64|x86_64)$'  { return 'amd64' }
+        '^(arm64|aarch64)$'      { return 'arm64' }
+        '^(x86|i[3-6]86)$'      { return 'x86' }
+        default {
+            Write-Log "Unrecognized guest architecture: '$Architecture'. Falling back to host architecture." "WARN"
+            return ""
+        }
     }
 }
 
@@ -1639,6 +1661,10 @@ function New-UnattendXml {
         $xmlArch = ConvertTo-UnattendArchitecture -Architecture $script:DetectedGuestArch
     }
     if (-not $xmlArch) {
+        $xmlArch = $script:HostArch
+        Write-Log "Unattend architecture: using host architecture fallback '$xmlArch'" "WARN"
+    }
+    if (-not $xmlArch) {
         $xmlArch = $script:HostArch   # fallback: 'amd64' or 'arm64'
     }
 
@@ -1772,7 +1798,7 @@ function New-UnattendXml {
 
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <ComputerName>$(if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15) } else { $xmlVMName })</ComputerName>
+      <ComputerName>$(if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15).TrimEnd('-') } else { $xmlVMName })</ComputerName>
       <TimeZone>$xmlTimezone</TimeZone>
     </component>
     <component name="Microsoft-Windows-Security-SPP-UX" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -3582,7 +3608,7 @@ $toolTip.SetToolTip($ctrlCreate["Parsec"], "Downloads and installs Parsec silent
 $toolTip.SetToolTip($ctrlCreate["VBCable"], "Installs VB-Audio virtual cable to route virtual audio devices in the guest. Good for streaming/remote desktop audio workflows.")
 $toolTip.SetToolTip($ctrlCreate["USBMMIDD"], "Installs a virtual display driver to provide a persistent headless display target in remote sessions.")
 $toolTip.SetToolTip($ctrlCreate["RDP"], "Enables Remote Desktop and firewall rules in the guest after setup.")
-$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a Desktop\share folder inside the guest with Everyone:FullControl access. Suitable for dev/lab VMs only — do not use on internet-exposed or production VMs.")
+$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a Desktop\share folder inside the guest with Everyone:FullControl access. Suitable for dev/lab VMs only - do not use on internet-exposed or production VMs.")
 $toolTip.SetToolTip($ctrlCreate["PauseUpdate"], "Pauses Windows Updates for an extended period after deployment. Useful for preserving known-good driver states.")
 $toolTip.SetToolTip($ctrlCreate["FullUpdate"], "Runs a full Windows Update sequence at first logon using PSWindowsUpdate (can take significant time and may reboot).")
 $toolTip.SetToolTip($ctrlCreate["NestedVirt"], "Exposes virtualization extensions to the guest so it can run Hyper-V/WSL2/other nested hypervisors.")
@@ -3662,6 +3688,18 @@ $btnBrowseISO.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = "ISO Files|*.iso"
     $dlg.Title  = "Select a Windows Installation ISO"
+    # Set initial directory to previous ISO path or user's Downloads folder
+    try {
+        $prevIso = $ctrlCreate["ISOPath"].Text
+        if (-not [string]::IsNullOrWhiteSpace($prevIso)) {
+            $prevDir = Split-Path $prevIso -Parent -ErrorAction SilentlyContinue
+            if ($prevDir -and (Test-Path $prevDir)) { $dlg.InitialDirectory = $prevDir }
+        }
+        if (-not $dlg.InitialDirectory) {
+            $downloadsDir = [Environment]::GetFolderPath('UserProfile') + '\Downloads'
+            if (Test-Path $downloadsDir) { $dlg.InitialDirectory = $downloadsDir }
+        }
+    } catch { }
     try {
     if ($dlg.ShowDialog() -eq 'OK') {
         $ctrlCreate["ISOPath"].Text = $dlg.FileName
@@ -3708,6 +3746,10 @@ $btnBrowseISO.Add_Click({
 
             # Parse editions
             $wimInfo = dism /Get-WimInfo /WimFile:"$($script:WimFile)" /English 2>&1
+            $dismEditionExitCode = $LASTEXITCODE
+            if ($dismEditionExitCode -ne 0) {
+                Write-Log "DISM failed to read WIM info (exit code $dismEditionExitCode). The ISO image may be corrupt or unsupported." "ERROR"
+            }
             $editions = @()
             $script:EditionMap = @{}
             $currentIndex = $null
@@ -3725,6 +3767,9 @@ $btnBrowseISO.Add_Click({
             $ctrlCreate["Edition"].Items.Clear()
             $ctrlCreate["Edition"].Items.AddRange($editions)
             if ($editions.Count -gt 0) { $ctrlCreate["Edition"].SelectedIndex = 0 }
+            if ($editions.Count -eq 0 -and $dismEditionExitCode -eq 0) {
+                Write-Log "No Windows editions found in the WIM/ESD file. The ISO may not contain a standard install image." "WARN"
+            }
             Write-Log "Found $($editions.Count) edition(s): $($editions -join ', ')" "OK"
 
             # Detect Windows version from first edition
@@ -3742,7 +3787,14 @@ $btnBrowseISO.Add_Click({
                 # Auto-suggest VM name from ISO filename
                 if ([string]::IsNullOrWhiteSpace($ctrlCreate["VMName"].Text)) {
                     $suggestedName = [IO.Path]::GetFileNameWithoutExtension($dlg.FileName) -replace '[^a-zA-Z0-9_-]', ''
-                    if ($suggestedName.Length -gt 15) { $suggestedName = $suggestedName.Substring(0, 15) }
+                    if ($suggestedName.Length -gt 15) { $suggestedName = $suggestedName.Substring(0, 15).TrimEnd('-') }
+                    # Avoid suggesting a name that conflicts with an existing VM
+                    if ($suggestedName -and (Get-VM -Name $suggestedName -ErrorAction SilentlyContinue)) {
+                        $suffix = 2
+                        $baseName = if ($suggestedName.Length -gt 13) { $suggestedName.Substring(0, 13) } else { $suggestedName }
+                        while (Get-VM -Name "${baseName}-${suffix}" -ErrorAction SilentlyContinue) { $suffix++ }
+                        $suggestedName = "${baseName}-${suffix}"
+                    }
                     $ctrlCreate["VMName"].Text = $suggestedName
                 }
             }
@@ -3875,7 +3927,16 @@ function Update-CreateValidationHint {
     $networkOk = ($switchSelected -or $autoSwitch)
     $userOk = (-not [string]::IsNullOrWhiteSpace($userName)) -and ($userName -match '^[a-zA-Z0-9]+$') -and ($userName -ine $vmName)
     $passwordOk = (-not [string]::IsNullOrWhiteSpace($passwordText))
-    $passwordWeak = ($passwordOk -and $passwordText.Length -lt 8)
+    $passwordWeak = $false
+    if ($passwordOk) {
+        $hasMinLength = ($passwordText.Length -ge 8)
+        $hasUpper = ($passwordText -cmatch '[A-Z]')
+        $hasLower = ($passwordText -cmatch '[a-z]')
+        $hasDigit = ($passwordText -match '\d')
+        $hasSpecial = ($passwordText -match '[^a-zA-Z0-9]')
+        $complexityScore = @($hasUpper, $hasLower, $hasDigit, $hasSpecial) | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count
+        $passwordWeak = (-not $hasMinLength -or $complexityScore -lt 3)
+    }
 
     # Golden image mode uses the embedded user profile — skip user/password checks
     if ($useGolden) {
@@ -4222,7 +4283,15 @@ $btnCreateVM.Add_Click({
                 return
             }
             $mountedIsoPath = [string]$script:MountedISO.ImagePath
-            if ($mountedIsoPath.Trim().ToLowerInvariant() -ne $ISOPath.Trim().ToLowerInvariant()) {
+            $isoMatch = $false
+            try {
+                $resolvedMounted = [System.IO.Path]::GetFullPath($mountedIsoPath.Trim()).ToLowerInvariant()
+                $resolvedSelected = [System.IO.Path]::GetFullPath($ISOPath.Trim()).ToLowerInvariant()
+                $isoMatch = ($resolvedMounted -eq $resolvedSelected)
+            } catch {
+                $isoMatch = ($mountedIsoPath.Trim().ToLowerInvariant() -eq $ISOPath.Trim().ToLowerInvariant())
+            }
+            if (-not $isoMatch) {
                 Write-Log "Selected ISO does not match the currently mounted image. Re-select the ISO to refresh source metadata." "ERROR"
                 return
             }
@@ -4821,6 +4890,45 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Write-Log "WARNING: Golden Image mode cannot auto-detect the guest OS version." "WARN"
             Write-Log "  - Secure Boot / TPM settings use your selections; verify they match the parent image OS." "WARN"
             Write-Log "  - If the parent is Windows 11, ensure Secure Boot and TPM are both enabled." "WARN"
+            # Attempt lightweight OS detection from parent VHD to warn about mismatched settings
+            try {
+                $parentMounted = Mount-VHD -Path $GoldenParentVHD -ReadOnly -Passthru -ErrorAction Stop
+                Register-TrackedMountedImage -ImagePath $GoldenParentVHD
+                $parentDisk = $parentMounted | Get-Disk -ErrorAction SilentlyContinue
+                if ($parentDisk) {
+                    $parentParts = Get-DataPartitions -DiskNumber $parentDisk.Number
+                    foreach ($pp in $parentParts) {
+                        $pVol = Get-Volume -Partition $pp -ErrorAction SilentlyContinue
+                        if ($pVol -and $pVol.FileSystem -eq 'NTFS' -and $pVol.DriveLetter) {
+                            $regPath = "$($pVol.DriveLetter):\Windows\System32\config\SOFTWARE"
+                            if (Test-Path $regPath) {
+                                $regKey = $null
+                                try {
+                                    reg load "HKU\__golden_detect" $regPath 2>&1 | Out-Null
+                                    $goldenBuild = (Get-ItemProperty -Path 'Registry::HKU\__golden_detect\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuild' -ErrorAction SilentlyContinue).CurrentBuild
+                                    reg unload "HKU\__golden_detect" 2>&1 | Out-Null
+                                    if ($goldenBuild -and [int]$goldenBuild -ge 22000 -and -not $EnableSecureBoot) {
+                                        Write-Log "Golden parent appears to be Windows 11 (Build $goldenBuild) but Secure Boot is disabled. Enable it to avoid boot failures." "WARN"
+                                    }
+                                    if ($goldenBuild -and [int]$goldenBuild -ge 22000 -and -not $EnableTPM) {
+                                        Write-Log "Golden parent appears to be Windows 11 (Build $goldenBuild) but TPM is disabled. Enable it to avoid boot failures." "WARN"
+                                    }
+                                    if ($goldenBuild) { Write-Log "Golden parent detected build: $goldenBuild" "INFO" }
+                                } catch {
+                                    # Registry detection is best-effort
+                                    reg unload "HKU\__golden_detect" 2>&1 | Out-Null
+                                }
+                                break
+                            }
+                        }
+                    }
+                }
+                Dismount-VHD -Path $GoldenParentVHD -ErrorAction SilentlyContinue
+                Unregister-TrackedMountedImage -ImagePath $GoldenParentVHD
+            } catch {
+                Write-Log "Could not auto-detect golden parent OS (non-critical): $($_.Exception.Message)" "WARN"
+                try { Dismount-VHD -Path $GoldenParentVHD -ErrorAction SilentlyContinue; Unregister-TrackedMountedImage -ImagePath $GoldenParentVHD } catch { }
+            }
         }
 
         # ---- Create Hyper-V VM ----

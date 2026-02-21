@@ -55,7 +55,7 @@ if not exist "%SCRIPT_PATH%" (
     "$p=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent();" ^
     "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 0}else{exit 1}" >nul 2>&1
 
-if %errorLevel% neq 0 (
+if %ERRORLEVEL% neq 0 (
     call :log "Not elevated — requesting RunAs"
     if /i "%~1"=="--elevated" (
         call :log "ERROR: elevation failed or was declined"
@@ -75,7 +75,7 @@ if %errorLevel% neq 0 (
         "try { Start-Process -FilePath $env:LAUNCHER_PATH -Verb RunAs" ^
         "      -ArgumentList '--elevated' -ErrorAction Stop; exit 0" ^
         "} catch { exit 1 }" >nul 2>&1
-    if %errorLevel% neq 0 (
+    if %ERRORLEVEL% neq 0 (
         call :log "ERROR: elevation request failed"
         echo.
         echo  ERROR: Could not request elevation.
@@ -123,7 +123,7 @@ call :log "Launching toolkit (hidden console)"
 "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden ^
     -File "%SCRIPT_PATH%"
 
-set "LAUNCH_EXIT_CODE=%errorLevel%"
+set "LAUNCH_EXIT_CODE=%ERRORLEVEL%"
 call :log "Toolkit exited with code: %LAUNCH_EXIT_CODE%"
 
 if %LAUNCH_EXIT_CODE% neq 0 (

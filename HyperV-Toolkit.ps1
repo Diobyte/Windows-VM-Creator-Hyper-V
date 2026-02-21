@@ -33,7 +33,9 @@ if ($PSBoundParameters.ContainsKey('WhatIf') -and $WhatIf) {
 }
 
 if ($script:CliHeadless) {
-    Write-Host "Headless mode is not implemented in this version of HyperV-Toolkit." -ForegroundColor Yellow
+    # TODO: Headless (CLI-only) mode is planned for a future release.
+    # When implemented, this block will delegate to a non-GUI code path.
+    Write-Host "Headless mode is not yet implemented in this version of HyperV-Toolkit." -ForegroundColor Yellow
     Write-Host "Use GUI mode, or remove -Headless and run interactively." -ForegroundColor Yellow
     exit 1
 }
@@ -323,6 +325,7 @@ try {
 $script:HostIsWin11 = ($script:HostBuild -ge $script:BUILD_WIN11_MIN)
 $script:HostIsWin11Pro = $script:HostOsName -match 'Windows 11.*(Pro|Enterprise|Education)'
 $script:HostArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+$script:VideoControllers = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
 try {
     $addGpuCmd = Get-Command Add-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
     $script:SupportsGpuInstancePath = ($addGpuCmd -and $addGpuCmd.Parameters.ContainsKey('InstancePath'))
@@ -1167,8 +1170,8 @@ function Test-GpuPPreFlight {
     #>
     $issues = @()
 
-    # Fetch video controllers once for all checks
-    $videoControllers = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+    # Fetch video controllers from startup cache
+    $videoControllers = $script:VideoControllers
 
     # Check 1: Laptop NVIDIA GPU detection (unsupported for GPU-P)
     try {
@@ -1766,7 +1769,17 @@ function New-UnattendXml {
 
     # Keyboard Detection
     try { $keyboard = (Get-WinUserLanguageList)[0].InputMethodTips[0] }
-    catch { $keyboard = "0409:00000409" }
+    catch {
+        # Fallback: derive keyboard layout from current culture instead of hard-coding US-English
+        try {
+            $kbLayoutId = [System.Globalization.CultureInfo]::CurrentCulture.KeyboardLayoutId
+            $hexLayout  = '{0:X4}:{0:X8}' -f $kbLayoutId
+            $keyboard   = $hexLayout
+            Write-Log "Keyboard fallback derived from CurrentCulture: $keyboard" "WARN"
+        } catch {
+            $keyboard = "0409:00000409"  # ultimate fallback: US-English
+        }
+    }
 
     # Timezone Detection
     try { $timezone = (Get-TimeZone).Id }
@@ -2470,7 +2483,7 @@ function Copy-GpuDriverFolders {
 }
 
 function Test-HostHasNvidiaGpu {
-    $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+    $gpus = $script:VideoControllers
     $nvidiaGpus = $gpus | Where-Object { $_.Name -match "NVIDIA" }
     if ($nvidiaGpus) {
         Write-Log "Host NVIDIA GPU(s): $(($nvidiaGpus | ForEach-Object { $_.Name }) -join ', ')"
@@ -3317,7 +3330,7 @@ $grpVMs.Location = New-Object System.Drawing.Point(12, 12)
 $grpVMs.Size     = New-Object System.Drawing.Size(360, 430)
 
 $lblVmSearch = New-Object System.Windows.Forms.Label
-$lblVmSearch.Text      = "Filter:"
+$lblVmSearch.Text      = "Search:"
 $lblVmSearch.AutoSize  = $true
 $lblVmSearch.ForeColor = $theme.Text
 $lblVmSearch.Location  = New-Object System.Drawing.Point(12, 26)
@@ -4239,6 +4252,9 @@ $btnBrowseVM.Add_Click({
 
 # ---- Browse ISO + Detect Editions + Detect Version ----
 $btnBrowseISO.Add_Click({
+    # Prevent ISO browse/dismount while VM creation is in progress
+    if ($script:IsCreating) { return }
+
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = "ISO Files|*.iso"
     $dlg.Title  = "Select a Windows Installation ISO"
@@ -4300,7 +4316,8 @@ $btnBrowseISO.Add_Click({
                 return
             }
 
-            # Parse editions
+            # Parse editions (this can take several seconds for large WIM/ESD files)
+            Update-CreateProgress -Percent 0 -Status "Scanning ISO editions (DISM)..."
             $wimInfo = dism /Get-WimInfo /WimFile:"$($script:WimFile)" /English 2>&1
             $dismEditionExitCode = $LASTEXITCODE
             if ($dismEditionExitCode -ne 0) {
@@ -4519,6 +4536,18 @@ function Update-CreateValidationHint {
             if (-not $passwordOk) { $missing += "password" }
             $ctrlCreate["CreateStatus"].Text = "Fix required: $($missing -join ', ')"
             $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Gold
+        }
+    }
+
+    # Visual feedback on the VM Name textbox itself
+    if ($ctrlCreate.ContainsKey("VMName") -and $ctrlCreate["VMName"]) {
+        $vmNameBox = $ctrlCreate["VMName"]
+        if ([string]::IsNullOrWhiteSpace($vmName)) {
+            $vmNameBox.ForeColor = $theme.Text  # neutral when empty
+        } elseif ($nameOk) {
+            $vmNameBox.ForeColor = $theme.Text
+        } else {
+            $vmNameBox.ForeColor = [System.Drawing.Color]::FromArgb(255, 100, 100)  # red-ish for invalid
         }
     }
 
@@ -5020,6 +5049,7 @@ $btnCreateVM.Add_Click({
         # ---- Create VM directory ----
         Update-CreateProgress -Percent 10 -Status "Creating VM workspace..."
         $VMLoc = Join-Path $VMLocBase $VMName
+        $VHDPath = Join-Path $VMLoc "$VMName.vhdx"  # Set early so rollback always knows the VHD path
         if (Test-Path $VMLoc) { Write-Log "Directory $VMLoc already exists; files may be overwritten" "WARN" }
         else {
             New-Item -Path $VMLoc -ItemType Directory -Force | Out-Null
@@ -5248,7 +5278,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             if (-not $efi.DriveLetter) {
                 Write-Log "EFI partition auto-letter not assigned (will acquire before boot config)." "INFO"
             }
-            Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel "System" -Confirm:$false | Out-Null
+            Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel "System" -Confirm:$false -ErrorAction Stop | Out-Null
 
             # MSR Partition
             New-Partition -DiskNumber $diskNumber -Size 16MB -GptType "{E3C9E316-0B5C-4DB8-817D-F92DF00215AE}" | Out-Null
@@ -5260,7 +5290,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 throw "Windows partition has no drive letter"
             }
             $driveLetter = $winPart.DriveLetter + ":"
-            Format-Volume -Partition $winPart -FileSystem NTFS -NewFileSystemLabel $VMName -Confirm:$false | Out-Null
+            Format-Volume -Partition $winPart -FileSystem NTFS -NewFileSystemLabel $VMName -Confirm:$false -ErrorAction Stop | Out-Null
 
             # Wait for drive to be ready
             $driveReady = $false
@@ -5924,6 +5954,10 @@ assign letter=$freeLetter
             $Password = $null
         }
         $PasswordText = $null
+        # Clear password from the UI text box so it doesn't persist in memory
+        if ($ctrlCreate.ContainsKey("Password") -and $ctrlCreate["Password"]) {
+            $ctrlCreate["Password"].Text = ""
+        }
         $script:IsCreating = $false
         $tabControl.Enabled  = $true
         [void](Update-CreateValidationHint)

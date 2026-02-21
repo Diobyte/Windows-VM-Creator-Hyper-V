@@ -1960,7 +1960,7 @@ $grpSoft           = New-Object System.Windows.Forms.GroupBox
 $grpSoft.Text      = "Post-Install Software && Advanced"
 $grpSoft.ForeColor = [System.Drawing.Color]::White
 $grpSoft.Location  = New-Object System.Drawing.Point(540, 318)
-$grpSoft.Size      = New-Object System.Drawing.Size(500, 270)
+$grpSoft.Size      = New-Object System.Drawing.Size(500, 240)
 $tabCreate.Controls.Add($grpSoft)
 
 $softwareChecks = @(
@@ -2308,7 +2308,7 @@ $tabGPU.Controls.Add($btnUpdateGPU)
 #  SHARED LOG PANEL
 # ============================================================
 $script:LogBox           = New-Object System.Windows.Forms.RichTextBox
-$script:LogBox.Location  = New-Object System.Drawing.Point(10, 505)
+$script:LogBox.Location  = New-Object System.Drawing.Point(10, 720)
 $script:LogBox.Size      = New-Object System.Drawing.Size(1200, 130)
 $script:LogBox.ReadOnly  = $true
 $script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(17, 19, 24)
@@ -2323,7 +2323,7 @@ $form.Controls.Add($script:LogBox)
 $btnClearLog           = New-Object System.Windows.Forms.Button
 $btnClearLog.Text      = "Clear Log"
 $btnClearLog.Size      = New-Object System.Drawing.Size(85, 30)
-$btnClearLog.Location  = New-Object System.Drawing.Point(1115, 505)
+$btnClearLog.Location  = New-Object System.Drawing.Point(1220, 720)
 $btnClearLog.FlatStyle = 'Flat'
 $btnClearLog.ForeColor = [System.Drawing.Color]::White
 $btnClearLog.Add_Click({ $script:LogBox.Clear() })
@@ -2333,7 +2333,7 @@ $form.Controls.Add($btnClearLog)
 $btnSaveLog            = New-Object System.Windows.Forms.Button
 $btnSaveLog.Text       = "Save Log"
 $btnSaveLog.Size       = New-Object System.Drawing.Size(85, 30)
-$btnSaveLog.Location   = New-Object System.Drawing.Point(1115, 540)
+$btnSaveLog.Location   = New-Object System.Drawing.Point(1220, 755)
 $btnSaveLog.FlatStyle  = 'Flat'
 $btnSaveLog.ForeColor  = [System.Drawing.Color]::White
 $btnSaveLog.Add_Click({
@@ -2355,7 +2355,7 @@ $form.Controls.Add($btnSaveLog)
 $btnExit           = New-Object System.Windows.Forms.Button
 $btnExit.Text      = "EXIT"
 $btnExit.Size      = New-Object System.Drawing.Size(85, 30)
-$btnExit.Location  = New-Object System.Drawing.Point(1115, 575)
+$btnExit.Location  = New-Object System.Drawing.Point(1220, 790)
 $btnExit.FlatStyle = 'Flat'
 $btnExit.BackColor = [System.Drawing.Color]::FromArgb(180, 40, 40)
 $btnExit.ForeColor = [System.Drawing.Color]::White

@@ -293,7 +293,11 @@ function Test-PathCached {
             return $entry.Result
         }
     }
-    $result = Test-Path $Path
+    try {
+        $result = Test-Path $Path
+    } catch {
+        $result = $false
+    }
     $script:PathCache[$Path] = @{ Result = $result; Time = $now }
     return $result
 }
@@ -534,6 +538,7 @@ function Dismount-ImageRetry {
             }
         }
     }
+    return $false
 }
 
 function Wait-ImageDetached {
@@ -687,7 +692,6 @@ function Start-VMWithRetry {
             }
         }
     }
-    return $false
 }
 
 function Get-PathAvailableSpaceGB {
@@ -931,7 +935,9 @@ function Set-VMGuestSecureBoot {
     try {
         Set-VMFirmware -VMName $VMName -EnableSecureBoot On -ErrorAction Stop | Out-Null
     } catch {
-        Write-Log "  Secure Boot enable pre-step failed, continuing template attempts: $($_.Exception.Message)" "WARN"
+        Write-Log "  Secure Boot enable pre-step failed: $($_.Exception.Message)" "WARN"
+        Write-Log "  Cannot proceed with Secure Boot template configuration." "WARN"
+        return $false
     }
     $templates = $TemplateOrder
     if (-not $templates -or $templates.Count -eq 0) {
@@ -1455,11 +1461,12 @@ function Invoke-DismApplyImage {
         Write-Log "DISM apply attempt: $($attempt.Label)"
         $dismArgs = $attempt.Args
 
-        # Run DISM in a background job with timeout to prevent indefinite hangs
+        # Run DISM in a background job with timeout to prevent indefinite hangs.
+        # Each output line is written individually so Receive-Job can stream progress.
         $dismJob = Start-Job -ScriptBlock {
             param($dismArgs)
-            $output = & dism @dismArgs 2>&1
-            return @{ Output = $output; ExitCode = $LASTEXITCODE }
+            & dism @dismArgs 2>&1 | ForEach-Object { Write-Output $_ }
+            Write-Output "__DISM_EXIT__:$LASTEXITCODE"
         } -ArgumentList (,$dismArgs)
 
         # Poll the job for incremental progress instead of blocking on Wait-Job
@@ -1468,23 +1475,28 @@ function Invoke-DismApplyImage {
         $pollInterval = 3  # seconds
         $lastPct = -1
         $timedOut = $false
+        $allOutput = [System.Collections.Generic.List[string]]::new()
+        $dismExitCode = $null
 
         while ($dismJob.State -eq 'Running' -and $elapsed -lt $timeoutSec) {
             Start-Sleep -Seconds $pollInterval
             $elapsed += $pollInterval
 
-            # Attempt to read partial output (DISM progress lines)
+            # Read partial output (DISM progress lines) as they stream
             try {
-                $partial = Receive-Job $dismJob -ErrorAction SilentlyContinue
-                if ($partial -and $partial.Output) {
-                    foreach ($line in $partial.Output) {
-                        $lineStr = "$line".Trim()
-                        if ($lineStr -match '(\d+)\.\d+%') {
-                            $pct = [int]$Matches[1]
-                            if ($pct -ne $lastPct -and ($pct % 10 -eq 0 -or $pct -ge 99)) {
-                                Write-Log "  DISM progress: ${pct}%"
-                                $lastPct = $pct
-                            }
+                $partial = @(Receive-Job $dismJob -ErrorAction SilentlyContinue)
+                foreach ($line in $partial) {
+                    $lineStr = "$line".Trim()
+                    if ($lineStr -match '^__DISM_EXIT__:(\d+)$') {
+                        $dismExitCode = [int]$Matches[1]
+                        continue
+                    }
+                    $allOutput.Add($lineStr)
+                    if ($lineStr -match '(\d+)\.\d+%') {
+                        $pct = [int]$Matches[1]
+                        if ($pct -ne $lastPct -and ($pct % 10 -eq 0 -or $pct -ge 99)) {
+                            Write-Log "  DISM progress: ${pct}%"
+                            $lastPct = $pct
                         }
                     }
                 }
@@ -1499,21 +1511,34 @@ function Invoke-DismApplyImage {
 
             # Clean up partially applied image to avoid corrupt state on retry
             if (Test-Path $ApplyDir) {
-                Write-Log "Cleaning up partial DISM image at $ApplyDir before retry..." "WARN"
-                Get-ChildItem -Path $ApplyDir -Force -ErrorAction SilentlyContinue |
-                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                $applyRoot = [System.IO.Path]::GetPathRoot($ApplyDir)
+                if ($ApplyDir.TrimEnd('\') -ne $applyRoot.TrimEnd('\')) {
+                    Write-Log "Cleaning up partial DISM image at $ApplyDir before retry..." "WARN"
+                    Get-ChildItem -Path $ApplyDir -Force -ErrorAction SilentlyContinue |
+                        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                } else {
+                    Write-Log "Skipping cleanup: ApplyDir is a drive root ($ApplyDir)" "WARN"
+                }
             }
             continue
         }
 
+        # Drain any remaining output after job completes
         try {
-            $result = Receive-Job $dismJob
-        } finally {
-            Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
-        }
+            $remaining = @(Receive-Job $dismJob -ErrorAction SilentlyContinue)
+            foreach ($line in $remaining) {
+                $lineStr = "$line".Trim()
+                if ($lineStr -match '^__DISM_EXIT__:(\d+)$') {
+                    $dismExitCode = [int]$Matches[1]
+                    continue
+                }
+                $allOutput.Add($lineStr)
+            }
+        } catch { }
+        Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
 
-        $dismOutput = $result.Output
-        $exitCode = $result.ExitCode
+        $dismOutput = $allOutput
+        $exitCode = if ($null -ne $dismExitCode) { $dismExitCode } else { 1 }
 
         foreach ($line in $dismOutput) {
             $lineStr = "$line".Trim()
@@ -1689,7 +1714,7 @@ $autoLogonBlock
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
           <!-- Username is validated to ^[a-zA-Z0-9]+$ so CMD-safe without extra escaping -->
-                      <CommandLine>powershell -NoProfile -Command "try { if (Get-Command Set-LocalUser -ErrorAction SilentlyContinue) { Set-LocalUser -Name '$Username' -PasswordNeverExpires $true } else { &amp; net.exe user '$Username' /expires:never | Out-Null } } catch { &amp; net.exe user '$Username' /expires:never | Out-Null }"</CommandLine>
+                      <CommandLine>powershell -NoProfile -Command "try { if (Get-Command Set-LocalUser -ErrorAction SilentlyContinue) { Set-LocalUser -Name '$xmlUsername' -PasswordNeverExpires $true } else { &amp; net.exe user '$xmlUsername' /expires:never | Out-Null } } catch { &amp; net.exe user '$xmlUsername' /expires:never | Out-Null }"</CommandLine>
           <Description>Disable Password Expiration</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
@@ -1728,7 +1753,9 @@ function Get-GpuPProviders {
         }
 
         # Skip dedicated AI/NPU accelerators (but not GPUs with 'AI' in branding)
-        if ($friendlyName -match '(?i)\b(NPU|Neural|VPU|Coral|Myriad)\b') { continue }
+        # Also skip if PnP resolved to a non-Display class device
+        if ($friendlyName -match '(?i)\b(NPU|Neural Processing|VPU|Coral|Myriad)\b') { continue }
+        if ($pnp -and $pnp.Class -and $pnp.Class -ne 'Display') { continue }
 
         $list += [PSCustomObject]@{
             Friendly = $friendlyName
@@ -1825,6 +1852,13 @@ function Copy-DriversToVhd {
 
     # If target exists and ForceDelete, remove it first
     if ($ForceDelete -and (Test-Path $target)) {
+        # Safety: verify target is under the mounted VHD drive
+        $targetRoot = [System.IO.Path]::GetPathRoot($target)
+        $expectedRoot = [System.IO.Path]::GetPathRoot("$($MountLetter)\")
+        if ($targetRoot -ne $expectedRoot) {
+            Write-Log "[$VMName] Refusing ForceDelete: target root '$targetRoot' does not match mount root '$expectedRoot'" "ERROR"
+            return $false
+        }
         Write-Log "[$VMName] Cleaning existing $target"
         try {
             $driveLetter = ($target -split ':')[0]
@@ -1946,8 +1980,10 @@ function Copy-GpuDriverFolders {
             Resize-VHD -Path $VhdPath -SizeBytes $newSize -ErrorAction Stop
 
             # Remount
-            Mount-DiskImage -ImagePath $VhdPath -ErrorAction Stop
-            Register-TrackedMountedImage -ImagePath $VhdPath
+            if (-not (Mount-VhdWithFallback -ImagePath $VhdPath)) {
+                Write-Log "[$VMName] Could not remount VHD after expansion" "ERROR"
+                return @{ Success = $false; MountLetter = $MountLetter }
+            }
             Start-Sleep -Seconds 2
 
             $disk = Get-DiskImage -ImagePath $VhdPath | Get-Disk
@@ -1987,8 +2023,7 @@ function Copy-GpuDriverFolders {
             Write-Log "[$VMName] VHD expansion failed: $($_.Exception.Message)" "ERROR"
             # Try to remount for cleanup
             try {
-                Mount-DiskImage -ImagePath $VhdPath -ErrorAction SilentlyContinue
-                Register-TrackedMountedImage -ImagePath $VhdPath
+                [void](Mount-VhdWithFallback -ImagePath $VhdPath)
             } catch {
                 Write-Log "[$VMName] VHD remount after expansion failure also failed: $($_.Exception.Message)" "WARN"
             }
@@ -2289,16 +2324,16 @@ $grpConfig.Controls.Add($sep2)
 $rowY += 14
 
 $ctrlCreate["vCPU"] = New-LabeledControl $grpConfig 12 $rowY "vCPUs:" -ControlType NumericUpDown -ControlWidth 80 `
-    -ControlProps @{ Minimum = 1; Maximum = [Environment]::ProcessorCount; Value = [Math]::Min(4, [Environment]::ProcessorCount) }
+    -ControlProps @{ Minimum = 1; Maximum = [Environment]::ProcessorCount; Value = [Math]::Min(4, [Environment]::ProcessorCount); DecimalPlaces = 0 }
 $rowY += 34
 
 $totalRamGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
 $ctrlCreate["Memory"] = New-LabeledControl $grpConfig 12 $rowY "Memory (GB):" -ControlType NumericUpDown -ControlWidth 80 `
-    -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(8, $totalRamGB) }
+    -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(8, $totalRamGB); DecimalPlaces = 0 }
 $rowY += 34
 
 $ctrlCreate["DiskSize"] = New-LabeledControl $grpConfig 12 $rowY "Disk (GB):" -ControlType NumericUpDown -ControlWidth 80 `
-    -ControlProps @{ Minimum = 20; Maximum = 2048; Value = 80 }
+    -ControlProps @{ Minimum = 20; Maximum = 2048; Value = 80; DecimalPlaces = 0 }
 $rowY += 34
 
 $ctrlCreate["Switch"] = New-LabeledControl $grpConfig 12 $rowY "Virtual Switch:" -ControlType ComboBox -ControlWidth 200
@@ -2322,11 +2357,11 @@ $ctrlCreate["CheckpointMode"].SelectedItem = "Disabled"
 $rowY += 34
 
 $ctrlCreate["DynamicMemMin"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Min (GB):" -LabelWidth 140 -ControlType NumericUpDown -ControlWidth 80 `
-        -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = 1 }
+        -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = 1; DecimalPlaces = 0 }
 $rowY += 38
 
 $ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Max (GB):" -LabelWidth 140 -ControlType NumericUpDown -ControlWidth 80 `
-        -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(16, $totalRamGB) }
+        -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(16, $totalRamGB); DecimalPlaces = 0 }
 
 # --- Right Column: Options ---
 
@@ -3340,6 +3375,10 @@ $form.Add_KeyDown({
 
     if (-not $e.Control) { return }
 
+    # Don't intercept shortcuts when a TextBox has focus (allow normal Ctrl+key editing)
+    $focused = $form.ActiveControl
+    if ($focused -is [System.Windows.Forms.TextBox] -or $focused -is [System.Windows.Forms.TextBoxBase]) { return }
+
     if ($e.KeyCode -eq [System.Windows.Forms.Keys]::L) {
         if ($btnClearLog -and $btnClearLog.Enabled) { $btnClearLog.PerformClick() }
         $e.SuppressKeyPress = $true
@@ -3637,13 +3676,6 @@ function Update-GpuActionState {
             $script:GpuSelectedVMs.GetEnumerator() |
                 Where-Object { $_.Value } |
                 ForEach-Object { $_.Key }
-        )
-    }
-    if ($ctrlGPU.ContainsKey("VMCheckboxes") -and $ctrlGPU["VMCheckboxes"]) {
-        $selectedNames += @(
-            $ctrlGPU["VMCheckboxes"] |
-                Where-Object { $_ -and $_.Checked } |
-                ForEach-Object { $_.Text }
         )
     }
     $selectedCount = @($selectedNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique).Count
@@ -4248,7 +4280,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $UnattendXMLPath = Join-Path $VMLoc "Autounattend.xml"
             $guestArchForUnattend = if ($UseGoldenImage) { $script:HostArch } else { $script:DetectedGuestArch }
             New-UnattendXml -VMName $VMName -Username $Username -Password $Password -EnableAutoLogon $EnableAutoLogon -IsWindows11 $IsWin11 -GuestArch $guestArchForUnattend |
-                Out-File -FilePath $UnattendXMLPath -Encoding UTF8
+                ForEach-Object { [IO.File]::WriteAllText($UnattendXMLPath, $_, [System.Text.UTF8Encoding]::new($false)) }
 
             # Minimize plaintext password lifetime in memory
             $PasswordText = $null
@@ -4644,7 +4676,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 }
             }
         }
-        if ($autoPlayGuard -ne $null) {
+        if ($null -ne $autoPlayGuard) {
             try {
                 Restore-AutoPlayState -State $autoPlayGuard
             } catch {
@@ -4674,20 +4706,13 @@ $btnUpdateGPU.Add_Click({
     $autoPlayGuard = $null
 
     try {
-        # Gather selections
+        # Gather selections from single source of truth
         $selectedVMs = @()
         if ($script:GpuSelectedVMs) {
             $selectedVMs += @(
                 $script:GpuSelectedVMs.GetEnumerator() |
                     Where-Object { $_.Value } |
                     ForEach-Object { $_.Key }
-            )
-        }
-        if ($ctrlGPU.ContainsKey("VMCheckboxes") -and $ctrlGPU["VMCheckboxes"]) {
-            $selectedVMs += @(
-                $ctrlGPU["VMCheckboxes"] |
-                    Where-Object { $_ -and $_.Checked } |
-                    ForEach-Object { $_.Text }
             )
         }
         $selectedVMs = @($selectedVMs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
@@ -5050,7 +5075,7 @@ $btnUpdateGPU.Add_Click({
     } catch {
         Write-ErrorWithGuidance -Context "GPU update" -ErrorRecord $_
     } finally {
-        if ($autoPlayGuard -ne $null) {
+        if ($null -ne $autoPlayGuard) {
             try {
                 Restore-AutoPlayState -State $autoPlayGuard
             } catch {

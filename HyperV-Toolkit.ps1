@@ -708,7 +708,8 @@ function Remove-PartialVmArtifacts {
     param(
         [string]$VMName,
         [string]$VMLoc,
-        [string]$VHDPath
+        [string]$VHDPath,
+        [bool]$RemoveVmFolder = $false
     )
 
     Write-Log "Attempting rollback cleanup for '$VMName'..." "WARN"
@@ -738,9 +739,11 @@ function Remove-PartialVmArtifacts {
     }
 
     try {
-        if ($VMLoc -and (Test-Path $VMLoc)) {
+        if ($RemoveVmFolder -and $VMLoc -and (Test-Path $VMLoc)) {
             Remove-Item -Path $VMLoc -Recurse -Force -ErrorAction SilentlyContinue
             Write-Log "Removed partially created VM folder: $VMLoc" "WARN"
+        } elseif ($VMLoc -and (Test-Path $VMLoc)) {
+            Write-Log "Rollback safety: preserved existing VM folder (not created by this run): $VMLoc" "WARN"
         }
     } catch {
         Write-Log "Rollback warning (folder cleanup): $($_.Exception.Message)" "WARN"
@@ -2696,7 +2699,7 @@ function Update-TabLayouts {
         $allocLabelX = [Math]::Min(($ctrlGPU["GpuAllocSlider"].Right + 8), ($grpGPUSettings.Width - 52))
         $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point([Math]::Max(10, $allocLabelX), 158)
 
-        if ($ctrlGPU.ContainsKey("SelectionHint") -and $ctrlGPU["SelectionHint"]) {
+        if ($ctrlGPU.ContainsKey("SelectionHint") -and $null -ne $ctrlGPU["SelectionHint"]) {
             if ($singleGpuColumn) {
                 $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($tabPadding, ($btnUpdateGPU.Bottom + 8))
                 $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 18)
@@ -2706,7 +2709,7 @@ function Update-TabLayouts {
             }
         }
 
-        $gpuBottomMost = if ($ctrlGPU.ContainsKey("SelectionHint") -and $ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Bottom } else { $btnUpdateGPU.Bottom }
+        $gpuBottomMost = if ($ctrlGPU.ContainsKey("SelectionHint") -and $null -ne $ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Bottom } else { $btnUpdateGPU.Bottom }
         $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
     } catch {
         Write-Output "Tab layout adjustment warning: $($_.Exception.Message)"
@@ -3287,6 +3290,7 @@ $btnCreateVM.Add_Click({
     $rollbackNeeded = $false
     $autoPlayChanged = $false
     $vhdMountedForDeploy = $false
+    $vmFolderCreatedByScript = $false
 
     try {
         Update-CreateProgress -Percent 2 -Status "Validating VM settings..."
@@ -3513,7 +3517,10 @@ $btnCreateVM.Add_Click({
         Update-CreateProgress -Percent 10 -Status "Creating VM workspace..."
         $VMLoc = Join-Path $VMLocBase $VMName
         if (Test-Path $VMLoc) { Write-Log "Directory $VMLoc already exists; files may be overwritten" "WARN" }
-        else { New-Item -Path $VMLoc -ItemType Directory -Force | Out-Null }
+        else {
+            New-Item -Path $VMLoc -ItemType Directory -Force | Out-Null
+            $vmFolderCreatedByScript = $true
+        }
         try {
             $preflightPath = Join-Path $VMLoc "Preflight-Profile.txt"
             $preflightLines | Out-File -FilePath $preflightPath -Encoding UTF8 -Force
@@ -3570,7 +3577,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- Parsec ---'
                 'echo [%date% %time%] Downloading Parsec... >> %LOGFILE%'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://builds.parsecgaming.com/package/parsec-windows.exe'' -OutFile ''%WORKDIR%\parsec.exe''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\parsec.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Parsec'') { throw ''Parsec signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] Parsec download/signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
+                'if errorlevel 1 (echo [%date% %time%] Parsec download/signature validation failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
                 'echo [%date% %time%] Installing Parsec... >> %LOGFILE%'
                 'start /wait %WORKDIR%\parsec.exe /silent /percomputer /norun /vdd'
                 ''
@@ -3581,12 +3588,13 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- VB Cable ---'
                 'echo [%date% %time%] Downloading VB Cable... >> %LOGFILE%'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'' -OutFile ''%WORKDIR%\vb.zip''" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] VB Cable download failed >> %LOGFILE% & goto :SetupCompleteEnd)'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable download failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
                 'if not exist "%WORKDIR%\VB" mkdir "%WORKDIR%\VB"'
-                'tar -xf %WORKDIR%\vb.zip -C %WORKDIR%\VB >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; Expand-Archive -Path ''%WORKDIR%\vb.zip'' -DestinationPath ''%WORKDIR%\VB'' -Force" >> %LOGFILE% 2>&1'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable archive extraction failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\VB\VBCABLE_Setup_x64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''VB[- ]Audio|Vincent Burel'') { throw ''VB Cable signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] VB Cable signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
-                'start /wait %WORKDIR%\VB\VBCABLE_Setup_x64 -h -i -H -n'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable signature validation failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'start /wait "" "%WORKDIR%\VB\VBCABLE_Setup_x64.exe" -h -i -H -n'
                 ''
             )
         }
@@ -3595,11 +3603,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- Virtual Display Driver ---'
                 'echo [%date% %time%] Downloading USBMMIDD... >> %LOGFILE%'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://www.amyuni.com/downloads/usbmmidd_v2.zip'' -OutFile ''%WORKDIR%\usbmmidd_v2.zip''" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] USBMMIDD download failed >> %LOGFILE% & goto :SetupCompleteEnd)'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD download failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
                 'if not exist "%WORKDIR%\usbmmidd_v2" mkdir "%WORKDIR%\usbmmidd_v2"'
-                'tar -xf %WORKDIR%\usbmmidd_v2.zip -C %WORKDIR% >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; Expand-Archive -Path ''%WORKDIR%\usbmmidd_v2.zip'' -DestinationPath ''%WORKDIR%'' -Force" >> %LOGFILE% 2>&1'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD archive extraction failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\usbmmidd_v2\deviceinstaller64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Amyuni'') { throw ''USBMMIDD signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] USBMMIDD signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD signature validation failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
                 '@echo off'
                 'setlocal DisableDelayedExpansion'
                 'echo @cd /d "%%~dp0" > "%WORKDIR%\usbmmidd_v2\usbmmidd2.bat"'
@@ -3664,13 +3673,13 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         # ---- Cleanup unattend files that may contain plaintext credentials (#12) ----
         $lines += @(
             ''
+            ':SetupCompleteCleanup'
             ':: --- Remove unattend XML files (may contain plaintext passwords) ---'
             'echo [%date% %time%] Cleaning up unattend files >> %LOGFILE%'
             'del /f /q C:\Autounattend.xml 2>nul'
             'del /f /q C:\Windows\Panther\Unattend\Unattend.xml 2>nul'
             'del /f /q C:\Windows\System32\Sysprep\Unattend.xml 2>nul'
             'echo [%date% %time%] Unattend cleanup complete >> %LOGFILE%'
-            ':SetupCompleteEnd'
         )
         $lines += @(
             'echo [%date% %time%] SetupComplete.cmd finished >> %LOGFILE%'
@@ -4058,7 +4067,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         Write-ErrorWithGuidance -Context "Create VM ($VMName)" -ErrorRecord $_
         Write-Log "Stack: $($_.ScriptStackTrace)" "ERROR"
         if ($rollbackNeeded) {
-            Remove-PartialVmArtifacts -VMName $VMName -VMLoc $VMLoc -VHDPath $VHDPath
+            Remove-PartialVmArtifacts -VMName $VMName -VMLoc $VMLoc -VHDPath $VHDPath -RemoveVmFolder $vmFolderCreatedByScript
         }
     } finally {
         if ($autoPlayChanged) {

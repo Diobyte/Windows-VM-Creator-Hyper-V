@@ -42,7 +42,7 @@ Hyper-V setup can be repetitive, especially when combining VM creation with GPU 
 - Hyper-V feature enabled
 - Administrator privileges
 - PowerShell (64-bit)
-- PowerShell execution policy that allows local scripts (the launcher uses `RemoteSigned`)
+- PowerShell execution policy that allows local scripts (the launcher invokes PowerShell with `ExecutionPolicy Bypass`)
 
 ## Project layout
 

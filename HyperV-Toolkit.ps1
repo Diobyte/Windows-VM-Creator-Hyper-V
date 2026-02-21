@@ -1896,8 +1896,19 @@ function Copy-GpuReferencedFiles {
             return @{ Success = $true; Copied = 0 }
         }
 
+        # Deduplicate driver entries to avoid redundant copies
+        $driverEntries = $driverEntries | Sort-Object -Property InfName -Unique
+
         $hostWindowsRoot = [System.IO.Path]::GetFullPath($env:WINDIR)
         $hostWindowsRootLower = $hostWindowsRoot.ToLowerInvariant()
+
+        foreach ($driver in $driverEntries) {
+            $infPath = $driver.InfName
+            if (-not $infPath) { continue }
+            if (-not [System.IO.Path]::IsPathRooted($infPath)) {
+                $infPath = Join-Path $env:WINDIR "INF\$infPath"
+            }
+            if (-not (Test-Path $infPath)) { continue }
         $hostDriverStoreRootLower = (Join-Path $hostWindowsRoot 'System32\DriverStore').ToLowerInvariant()
 
         foreach ($drv in $driverEntries) {
@@ -2124,9 +2135,10 @@ function Invoke-DismApplyImage {
         # Run DISM in a background job with timeout to prevent indefinite hangs.
         # Each output line is written individually so Receive-Job can stream progress.
         $dismJob = Start-Job -ScriptBlock {
-            & dism @Using:dismArgsForJob 2>&1 | ForEach-Object { Write-Output $_ }
+            param($dismArgsForJob)
+            & dism @dismArgsForJob 2>&1 | ForEach-Object { Write-Output $_ }
             Write-Output "__DISM_EXIT__:$LASTEXITCODE"
-        }
+        } -ArgumentList (,$dismArgsForJob)
 
         # Poll the job for incremental progress instead of blocking on Wait-Job
         $timeoutSec = $TimeoutMinutes * 60
@@ -2172,7 +2184,7 @@ function Invoke-DismApplyImage {
             # Guard aggressively against destructive deletions on non-target/system roots.
             if (Test-Path $ApplyDir) {
                 $applyRoot = [System.IO.Path]::GetPathRoot($ApplyDir)
-                $isDriveRoot = ($applyRoot -and (($ApplyDir.TrimEnd('\\') + '\\') -ieq $applyRoot))
+                $isDriveRoot = ($applyRoot -and (($ApplyDir.TrimEnd('\') + '\') -ieq $applyRoot))
                 $windowsDir = Join-Path $ApplyDir 'Windows'
                 $efiMarker = Join-Path $ApplyDir 'EFI'
                 $bootMarker = Join-Path $ApplyDir 'boot'

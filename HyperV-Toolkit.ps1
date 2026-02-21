@@ -179,6 +179,8 @@ try {
 } catch {
     Write-StartupTrace -Message "Hyper-V async check failed; attempting direct query" -Level 'WARN'
     Write-Host "    Async check failed, trying direct query..." -ForegroundColor Yellow
+    # Clean up leaked job from failed async attempt
+    if ($featureJob) { Remove-Job $featureJob -Force -ErrorAction SilentlyContinue }
     try {
         $feature = Get-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -ErrorAction SilentlyContinue
     } catch {
@@ -231,7 +233,16 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
 Write-Host "  [6/7] Detecting host configuration..." -ForegroundColor DarkGray
 # Detect host OS
 $script:HostOsName = (Get-CimInstance Win32_OperatingSystem).Caption
-$script:HostBuild  = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuild
+$script:HostBuild  = 0
+try {
+    $rawBuild = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuild
+    if (-not [int]::TryParse($rawBuild, [ref]$script:HostBuild)) {
+        Write-StartupTrace -Message "Non-numeric CurrentBuild value: '$rawBuild'; defaulting to 0" -Level 'WARN'
+        $script:HostBuild = 0
+    }
+} catch {
+    Write-StartupTrace -Message "Failed to read CurrentBuild from registry: $($_.Exception.Message)" -Level 'WARN'
+}
 $script:HostIsWin11 = ($script:HostBuild -ge $script:BUILD_WIN11_MIN)
 $script:HostIsWin11Pro = $script:HostOsName -match 'Windows 11.*(Pro|Enterprise|Education)'
 $script:HostArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
@@ -284,7 +295,8 @@ function Write-Log {
     $script:LogBox.SelectionColor  = $color
     $script:LogBox.AppendText("$timestamp [$Level] $Message`r`n")
     $script:LogBox.ScrollToCaret()
-    [System.Windows.Forms.Application]::DoEvents()
+    # Use targeted Refresh instead of DoEvents to avoid re-entrancy from queued event handlers
+    $script:LogBox.Refresh()
 }
 
 function Get-ErrorGuidance {
@@ -403,12 +415,17 @@ function Set-AutoPlay {
         $current = (Get-ItemProperty -Path $regPath -Name $regName -ErrorAction Stop).$regName
     } catch { $current = 0 }
 
-    if ($Disable -and $current -eq 0) {
-        Set-ItemProperty -Path $regPath -Name $regName -Value 1
-        return $true   # Changed: was enabled, now disabled
-    } elseif (-not $Disable -and $current -eq 1) {
-        Set-ItemProperty -Path $regPath -Name $regName -Value 0
-        return $true   # Changed: was disabled, now restored
+    try {
+        if ($Disable -and $current -eq 0) {
+            Set-ItemProperty -Path $regPath -Name $regName -Value 1 -ErrorAction Stop
+            return $true   # Changed: was enabled, now disabled
+        } elseif (-not $Disable -and $current -eq 1) {
+            Set-ItemProperty -Path $regPath -Name $regName -Value 0 -ErrorAction Stop
+            return $true   # Changed: was disabled, now restored
+        }
+    } catch {
+        # Registry write failed (e.g. GPO-locked); report no change to avoid bad restore
+        return $false
     }
     return $false      # No change needed
 }
@@ -430,7 +447,11 @@ function Restore-AutoPlayState {
 
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers"
     $regName = "DisableAutoplay"
-    Set-ItemProperty -Path $regPath -Name $regName -Value $State -ErrorAction Stop
+    try {
+        Set-ItemProperty -Path $regPath -Name $regName -Value $State -ErrorAction Stop
+    } catch {
+        Write-Output "Could not restore AutoPlay registry value: $($_.Exception.Message)"
+    }
 }
 
 function Dismount-ImageRetry {
@@ -529,8 +550,10 @@ function Get-VMPrimaryVhdPath {
             $firmware = Get-VMFirmware -VMName $VMName -ErrorAction SilentlyContinue
             if ($firmware -and $firmware.BootOrder) {
                 foreach ($bootDevice in $firmware.BootOrder) {
-                    if ($bootDevice -and $bootDevice.GetType().Name -eq 'VMHardDiskDrive') {
-                        $bootPath = $bootDevice.Path
+                    if ($bootDevice -and $bootDevice.Device -and
+                        $bootDevice.BootType -eq 'Drive' -and
+                        $bootDevice.Device.Path) {
+                        $bootPath = $bootDevice.Device.Path
                         if (-not [string]::IsNullOrWhiteSpace($bootPath) -and (Test-Path $bootPath)) {
                             return $bootPath
                         }
@@ -687,11 +710,13 @@ function Set-ToolkitNatSwitch {
         [string]$NatPrefix = "192.168.250.0/24"
     )
 
+    $switchCreatedByUs = $false
     try {
         $existingSwitch = Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue
         if (-not $existingSwitch) {
             Write-Log "No usable virtual switch selected. Creating internal NAT switch '$SwitchName'..." "WARN"
             New-VMSwitch -Name $SwitchName -SwitchType Internal -ErrorAction Stop | Out-Null
+            $switchCreatedByUs = $true
             Start-Sleep -Seconds 1
             Write-Log "Created virtual switch: $SwitchName" "OK"
         }
@@ -731,6 +756,15 @@ function Set-ToolkitNatSwitch {
         return $SwitchName
     } catch {
         Write-Log "Auto-create switch/NAT failed: $($_.Exception.Message)" "ERROR"
+        # Clean up partially created switch if we created it in this call
+        if ($switchCreatedByUs) {
+            try {
+                Remove-VMSwitch -Name $SwitchName -Force -ErrorAction SilentlyContinue
+                Write-Log "Removed partially configured switch '$SwitchName' during cleanup." "WARN"
+            } catch {
+                Write-Log "Could not clean up partial switch '$SwitchName': $($_.Exception.Message)" "WARN"
+            }
+        }
         return $null
     }
 }
@@ -759,11 +793,12 @@ function Update-CreateProgress {
     if ($ctrlCreate -and $ctrlCreate.ContainsKey("CreateProgress")) {
         $safePercent = [Math]::Max(0, [Math]::Min(100, $Percent))
         $ctrlCreate["CreateProgress"].Value = $safePercent
+        $ctrlCreate["CreateProgress"].Refresh()
     }
     if ($ctrlCreate -and $ctrlCreate.ContainsKey("CreateStatus")) {
         $ctrlCreate["CreateStatus"].Text = $Status
+        $ctrlCreate["CreateStatus"].Refresh()
     }
-    [System.Windows.Forms.Application]::DoEvents()
 }
 
 function Remove-PartialVmArtifacts {
@@ -791,9 +826,10 @@ function Remove-PartialVmArtifacts {
 
     try {
         if ($VHDPath -and (Test-Path $VHDPath)) {
-            $img = Get-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue
-            if ($img -and $img.Attached) {
+            if (-not (Dismount-ImageRetry -ImagePath $VHDPath -MaxRetries 3)) {
+                # Fallback to Dismount-VHD if Dismount-ImageRetry failed
                 Dismount-VHD -Path $VHDPath -ErrorAction SilentlyContinue
+                Unregister-TrackedMountedImage -ImagePath $VHDPath
             }
         }
     } catch {
@@ -1141,9 +1177,21 @@ function Copy-GpuServiceDriver {
             $partList = Get-CimInstance -Namespace "ROOT\virtualization\v2" -ClassName "Msvm_PartitionableGpu" -ErrorAction SilentlyContinue
             if ($partList) {
                 $devPath = if ($partList.Name -is [array]) { $partList.Name[0] } else { $partList.Name }
-                $gpu = Get-PnpDevice | Where-Object {
-                    ($_.DeviceID -like "*$($devPath.Substring(8,16))*") -and ($_.Status -eq 'OK')
-                } | Select-Object -First 1
+                # Extract PCI bus/device/function segment dynamically from the device path
+                # Typical format: PCIP\VEN_XXXX&DEV_XXXX&... - extract the VEN&DEV segment after the first '#'
+                $pciSegments = $devPath -split '#'
+                $matchPattern = if ($pciSegments.Count -gt 1 -and $pciSegments[1].Length -ge 8) {
+                    "*$($pciSegments[1].Substring(0, [Math]::Min($pciSegments[1].Length, 21)))*"
+                } elseif ($devPath.Length -ge 24) {
+                    "*$($devPath.Substring(8, 16))*"   # Legacy fallback
+                } else {
+                    $null
+                }
+                if ($matchPattern) {
+                    $gpu = Get-PnpDevice | Where-Object {
+                        ($_.DeviceID -like $matchPattern) -and ($_.Status -eq 'OK')
+                    } | Select-Object -First 1
+                }
             }
         } else {
             $gpu = Get-PnpDevice | Where-Object { ($_.Name -eq $GPUName) -and ($_.Status -eq 'OK') } | Select-Object -First 1
@@ -1355,14 +1403,17 @@ function Invoke-DismApplyImage {
             continue
         }
 
-        $result = Receive-Job $dismJob
-        Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
+        try {
+            $result = Receive-Job $dismJob
+        } finally {
+            Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
+        }
 
         $dismOutput = $result.Output
         $exitCode = $result.ExitCode
 
         foreach ($line in $dismOutput) {
-            $lineStr = $line.ToString().Trim()
+            $lineStr = "$line".Trim()
             if ($lineStr -and $lineStr -notmatch '^\s*$') {
                 if ($lineStr -match '\d+\.\d+%') {
                     $pctMatch = [regex]::Match($lineStr, '(\d+)\.\d+%')
@@ -1424,6 +1475,7 @@ function New-UnattendXml {
     $xmlVMName       = ConvertTo-XmlEscapedValue -Value $VMName
     $xmlUsername     = ConvertTo-XmlEscapedValue -Value $Username
     $xmlPasswordB64  = ConvertTo-UnattendPassword -PlainText $passwordPlain
+    $passwordPlain   = $null   # Minimize plaintext password lifetime in memory
     $xmlUiLang       = ConvertTo-XmlEscapedValue -Value $uiLang
     $xmlKeyboard     = ConvertTo-XmlEscapedValue -Value $keyboard
     $xmlSystemLoc    = ConvertTo-XmlEscapedValue -Value $systemLoc
@@ -1452,20 +1504,20 @@ function New-UnattendXml {
 "@
     }
 
-        $autoLogonBlock = ""
-        if ($EnableAutoLogon) {
-                $autoLogonBlock = @"
-            <AutoLogon>
-                                <Username>$xmlUsername</Username>
-                <Enabled>true</Enabled>
-                <LogonCount>3</LogonCount>
-                <Password>
-                                        <Value>$xmlPasswordB64</Value>
-                    <PlainText>false</PlainText>
-                </Password>
-            </AutoLogon>
+    $autoLogonBlock = ""
+    if ($EnableAutoLogon) {
+        $autoLogonBlock = @"
+      <AutoLogon>
+        <Username>$xmlUsername</Username>
+        <Enabled>true</Enabled>
+        <LogonCount>3</LogonCount>
+        <Password>
+          <Value>$xmlPasswordB64</Value>
+          <PlainText>false</PlainText>
+        </Password>
+      </AutoLogon>
 "@
-        }
+    }
 
     return @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -1597,7 +1649,7 @@ function Get-GpuDriverStoreFolders {
         This dramatically reduces copy size vs copying the entire DriverStore.
     #>
     param(
-        [string]$DriverStore = "C:\Windows\System32\DriverStore\FileRepository",
+        [string]$DriverStore = "$env:SystemRoot\System32\DriverStore\FileRepository",
         [string]$GpuVendor = "Auto"
     )
 
@@ -1705,11 +1757,13 @@ function Copy-DriversToVhd {
             }
         } else {
             $srcPath = Join-Path $Source $FileMask
-            if (Test-Path $srcPath) {
-                Copy-Item -Path $srcPath -Destination $target -Recurse -Force -ErrorAction Stop
-            } else {
+            if ($FileMask -ne "*" -and -not (Get-ChildItem -Path $srcPath -ErrorAction SilentlyContinue)) {
                 Write-Log "[$VMName] No files matching '$FileMask' in $Source" "WARN"
-                if ($FileMask -eq "*") { $copySucceeded = $false }
+            } elseif ($FileMask -eq "*" -and -not (Test-Path $srcPath)) {
+                Write-Log "[$VMName] No files matching '$FileMask' in $Source" "WARN"
+                $copySucceeded = $false
+            } else {
+                Copy-Item -Path $srcPath -Destination $target -Recurse -Force -ErrorAction Stop
             }
         }
     } catch {
@@ -1735,7 +1789,7 @@ function Copy-GpuDriverFolders {
         [bool]$AutoExpand = $true
     )
 
-    $HostDriverStore = "C:\Windows\System32\DriverStore\FileRepository"
+    $HostDriverStore = "$env:SystemRoot\System32\DriverStore\FileRepository"
     $VMDriverStore   = "Windows\System32\HostDriverStore\FileRepository"
     $targetBase      = Join-Path "$($MountLetter)\" $VMDriverStore
 
@@ -1746,7 +1800,7 @@ function Copy-GpuDriverFolders {
 
         if ($gpuFolders.Count -eq 0) {
             Write-Log "[$VMName] No GPU driver folders found!" "ERROR"
-            return $false
+            return @{ Success = $false; MountLetter = $MountLetter }
         }
 
         # Calculate total size
@@ -1771,7 +1825,7 @@ function Copy-GpuDriverFolders {
     if ($totalSize -gt ($freeSpace - 1GB)) {
         if (-not $AutoExpand) {
             Write-Log "[$VMName] Insufficient space and auto-expand is disabled." "ERROR"
-            return $false
+            return @{ Success = $false; MountLetter = $MountLetter }
         }
         Write-Log "[$VMName] Insufficient space. Attempting VHD auto-expand..." "WARN"
 
@@ -1823,7 +1877,7 @@ function Copy-GpuDriverFolders {
 
             if ($totalSize -gt ($freeSpace - 1GB)) {
                 Write-Log "[$VMName] Still insufficient space after expansion!" "ERROR"
-                return $false
+                return @{ Success = $false; MountLetter = $MountLetter }
             }
         } catch {
             Write-Log "[$VMName] VHD expansion failed: $($_.Exception.Message)" "ERROR"
@@ -1834,7 +1888,7 @@ function Copy-GpuDriverFolders {
             } catch {
                 Write-Log "[$VMName] VHD remount after expansion failure also failed: $($_.Exception.Message)" "WARN"
             }
-            return $false
+            return @{ Success = $false; MountLetter = $MountLetter }
         }
     }
 
@@ -1867,7 +1921,7 @@ function Copy-GpuDriverFolders {
         Write-Log "[$VMName] Copied $copied of $($gpuFolders.Count) GPU driver folders" "OK"
         if ($copied -eq 0 -and $gpuFolders.Count -gt 0) {
             Write-Log "[$VMName] No GPU driver folders were copied successfully." "ERROR"
-            return $false
+            return @{ Success = $false; MountLetter = $MountLetter }
         }
     } else {
         # Full copy using robocopy or Copy-Item
@@ -1875,15 +1929,15 @@ function Copy-GpuDriverFolders {
         $fullCopyOk = Copy-DriversToVhd -VMName $VMName -MountLetter $MountLetter -Source $HostDriverStore -Destination $VMDriverStore -ForceDelete
         if (-not $fullCopyOk) {
             Write-Log "[$VMName] Full DriverStore copy did not complete successfully." "ERROR"
-            return $false
+            return @{ Success = $false; MountLetter = $MountLetter }
         }
     }
 
-    return $true
+    return @{ Success = $true; MountLetter = $MountLetter }
 }
 
 function Test-HostHasNvidiaGpu {
-    $gpus = Get-CimInstance Win32_VideoController
+    $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
     $nvidiaGpus = $gpus | Where-Object { $_.Name -match "NVIDIA" }
     if ($nvidiaGpus) {
         Write-Log "Host NVIDIA GPU(s): $(($nvidiaGpus | ForEach-Object { $_.Name }) -join ', ')"
@@ -1916,6 +1970,15 @@ function Set-GpuPartitionForVM {
 
 Write-Host "  [7/7] Building interface..." -ForegroundColor DarkGray
 
+# ---- Shared Font Cache (disposed on close) ----
+$script:FontMain       = New-Object System.Drawing.Font("Segoe UI", 9.75)
+$script:FontTabHeader  = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
+$script:FontHeader     = New-Object System.Drawing.Font("Segoe UI", 8.75)
+$script:FontBoldButton = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$script:FontSmall      = New-Object System.Drawing.Font("Segoe UI", 8)
+$script:FontBoldLabel  = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$script:FontConsolas   = New-Object System.Drawing.Font("Consolas", 9.5)
+
 # ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text              = "Hyper-V Toolkit - Version 1 - Diobyte - Made with love"
@@ -1924,7 +1987,7 @@ $form.MinimumSize       = New-Object System.Drawing.Size(1320, 860)
 $form.FormBorderStyle   = 'Sizable'
 $form.MaximizeBox       = $true
 $form.StartPosition     = "CenterScreen"
-$form.Font              = New-Object System.Drawing.Font("Segoe UI", 9.75)
+$form.Font              = $script:FontMain
 $form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.BackColor         = [System.Drawing.Color]::FromArgb(24, 26, 31)
 $form.ForeColor         = [System.Drawing.Color]::White
@@ -1952,12 +2015,14 @@ $theme = @{
 $tabControl            = New-Object System.Windows.Forms.TabControl
 $tabControl.Location   = New-Object System.Drawing.Point(10, 8)
 $tabControl.Size       = New-Object System.Drawing.Size(1310, 700)
-$tabControl.Font       = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
+$tabControl.Font       = $script:FontTabHeader
 $tabControl.DrawMode   = [System.Windows.Forms.TabDrawMode]::OwnerDrawFixed
 $tabControl.ItemSize   = New-Object System.Drawing.Size(150, 32)
 $tabControl.SizeMode   = [System.Windows.Forms.TabSizeMode]::Fixed
 $tabControl.Padding    = New-Object System.Drawing.Point(14, 4)
 $tabControl.BackColor  = $theme.Card
+$script:TabBrushSelected = New-Object System.Drawing.SolidBrush($theme.Accent)
+$script:TabBrushNormal   = New-Object System.Drawing.SolidBrush($theme.Surface)
 $tabControl.Add_DrawItem({
     param($tabCtrl, $e)
     if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabCtrl.TabPages.Count) { return }
@@ -1966,10 +2031,8 @@ $tabControl.Add_DrawItem({
     $tabPage = $tabCtrl.TabPages[$e.Index]
     $rect = $e.Bounds
 
-    $bg = if ($isSelected) { $theme.Accent } else { $theme.Surface }
-    $fg = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
-
-    $brush = New-Object System.Drawing.SolidBrush($bg)
+    $brush = if ($isSelected) { $script:TabBrushSelected } else { $script:TabBrushNormal }
+    $fg    = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
 
     $e.Graphics.FillRectangle($brush, $rect)
     $tabText = if ([string]::IsNullOrWhiteSpace($tabPage.Text)) { " " } else { $tabPage.Text.Trim() }
@@ -1981,8 +2044,6 @@ $tabControl.Add_DrawItem({
         $fg,
         [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
     )
-
-    $brush.Dispose()
 })
 $form.Controls.Add($tabControl)
 
@@ -2015,7 +2076,7 @@ $lblCreateHeader.Text = "Build, configure, and launch Hyper-V VMs with secure de
 $lblCreateHeader.AutoSize = $true
 $lblCreateHeader.Location = New-Object System.Drawing.Point(10, 2)
 $lblCreateHeader.ForeColor = $theme.Muted
-$lblCreateHeader.Font = New-Object System.Drawing.Font("Segoe UI", 8.75)
+$lblCreateHeader.Font = $script:FontHeader
 $tabCreate.Controls.Add($lblCreateHeader)
 
 # Vars to hold controls
@@ -2310,7 +2371,7 @@ $btnCreateVM.Location  = New-Object System.Drawing.Point(642, 34)
 $btnCreateVM.FlatStyle = 'Flat'
 $btnCreateVM.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
 $btnCreateVM.ForeColor = [System.Drawing.Color]::White
-$btnCreateVM.Font      = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$btnCreateVM.Font      = $script:FontBoldButton
 $bottomPanel.Controls.Add($btnCreateVM)
 
 # Create VM status + progress
@@ -2345,7 +2406,7 @@ $lblGpuHeader.Text = "Select VMs, configure GPU-P allocation, and inject/update 
 $lblGpuHeader.AutoSize = $true
 $lblGpuHeader.Location = New-Object System.Drawing.Point(10, 2)
 $lblGpuHeader.ForeColor = $theme.Muted
-$lblGpuHeader.Font = New-Object System.Drawing.Font("Segoe UI", 8.75)
+$lblGpuHeader.Font = $script:FontHeader
 $tabGPU.Controls.Add($lblGpuHeader)
 
 $ctrlGPU = @{}
@@ -2438,8 +2499,17 @@ function Update-VMList {
 }
 Update-VMList
 
-$ctrlGPU["VmSearch"].Add_TextChanged({ Update-VMList })
-$btnClearVmSearch.Add_Click({ $ctrlGPU["VmSearch"].Text = ""; Update-VMList })
+$script:VmFilterTimer = New-Object System.Windows.Forms.Timer
+$script:VmFilterTimer.Interval = 300
+$script:VmFilterTimer.Add_Tick({
+    $script:VmFilterTimer.Stop()
+    Update-VMList
+})
+$ctrlGPU["VmSearch"].Add_TextChanged({
+    $script:VmFilterTimer.Stop()
+    $script:VmFilterTimer.Start()
+})
+$btnClearVmSearch.Add_Click({ $ctrlGPU["VmSearch"].Text = ""; $script:VmFilterTimer.Stop(); Update-VMList })
 
 # Select All / None buttons
 $btnSelectAll = New-Object System.Windows.Forms.Button
@@ -2507,7 +2577,7 @@ if (-not $script:SupportsGpuInstancePath) {
     $lblGpuWarn.AutoSize = $true
     $lblGpuWarn.Location = New-Object System.Drawing.Point(12, 56)
     $lblGpuWarn.ForeColor = [System.Drawing.Color]::Gold
-    $lblGpuWarn.Font     = New-Object System.Drawing.Font("Segoe UI", 8)
+    $lblGpuWarn.Font     = $script:FontSmall
     $grpGPUSettings.Controls.Add($lblGpuWarn)
 }
 
@@ -2559,7 +2629,7 @@ $ctrlGPU["GpuAllocLabel"].Text     = "100%"
 $ctrlGPU["GpuAllocLabel"].AutoSize = $true
 $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point(395, 158)
 $ctrlGPU["GpuAllocLabel"].ForeColor = [System.Drawing.Color]::Cyan
-$ctrlGPU["GpuAllocLabel"].Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$ctrlGPU["GpuAllocLabel"].Font = $script:FontBoldLabel
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuAllocLabel"])
 
 $ctrlGPU["GpuAllocSlider"].Add_ValueChanged({
@@ -2613,7 +2683,7 @@ $btnUpdateGPU.Location  = New-Object System.Drawing.Point(540, 448)
 $btnUpdateGPU.FlatStyle = 'Flat'
 $btnUpdateGPU.BackColor = [System.Drawing.Color]::FromArgb(0, 153, 51)
 $btnUpdateGPU.ForeColor = [System.Drawing.Color]::White
-$btnUpdateGPU.Font      = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$btnUpdateGPU.Font      = $script:FontBoldButton
 $tabGPU.Controls.Add($btnUpdateGPU)
 
 $ctrlGPU["SelectionHint"] = New-Object System.Windows.Forms.Label
@@ -2632,7 +2702,7 @@ $script:LogBox.Size      = New-Object System.Drawing.Size(1200, 130)
 $script:LogBox.ReadOnly  = $true
 $script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(17, 19, 24)
 $script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(166, 243, 160)
-$script:LogBox.Font      = New-Object System.Drawing.Font("Consolas", 9.5)
+$script:LogBox.Font      = $script:FontConsolas
 $script:LogBox.WordWrap  = $false
 $script:LogBox.ScrollBars = 'Both'
 $script:LogBox.BorderStyle = 'FixedSingle'
@@ -2691,6 +2761,7 @@ function Update-MainLayout {
     if (-not $tabControl -or -not $script:LogBox -or -not $btnClearLog -or -not $btnSaveLog -or -not $btnExit) { return }
 
     try {
+        $RootForm.SuspendLayout()
         $margin = 10
         $rightButtonColWidth = 85
         $rightButtonGap = 10
@@ -2717,6 +2788,8 @@ function Update-MainLayout {
         Update-TabLayouts -RootForm $RootForm
     } catch {
         Write-Output "Layout adjustment warning: $($_.Exception.Message)"
+    } finally {
+        $RootForm.ResumeLayout($true)
     }
 }
 
@@ -2725,6 +2798,8 @@ function Update-TabLayouts {
 
     if (-not $RootForm -or $RootForm.IsDisposed) { return }
 
+    $tabCreate.SuspendLayout()
+    $tabGPU.SuspendLayout()
     try {
         $tabPadding = 8
         $sectionGap = 10
@@ -2968,6 +3043,9 @@ function Update-TabLayouts {
         $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
     } catch {
         Write-Output "Tab layout adjustment warning: $($_.Exception.Message)"
+    } finally {
+        $tabCreate.ResumeLayout($true)
+        $tabGPU.ResumeLayout($true)
     }
 }
 
@@ -3012,6 +3090,9 @@ function Set-ButtonHover {
     }.GetNewClosure())
 }
 
+# Pre-create shared font objects for theming to avoid per-control allocation leaks
+$script:ThemeFontGroupBox = New-Object System.Drawing.Font("Segoe UI Semibold", 9.5)
+
 function Set-ModernTheme {
     param([System.Windows.Forms.Control]$Root)
 
@@ -3020,7 +3101,7 @@ function Set-ModernTheme {
             'GroupBox' {
                 $control.BackColor = $theme.Surface
                 $control.ForeColor = $theme.Text
-                $control.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9.5)
+                $control.Font = $script:ThemeFontGroupBox
             }
             'Label' {
                 if ($control.ForeColor -eq [System.Drawing.Color]::White) {
@@ -3087,7 +3168,6 @@ Set-ButtonHover -Button $btnClearVmSearch -Normal $theme.Surface -Hover $theme.B
 Set-ModernTheme -Root $form
 
 # Keyboard-first behavior: Enter runs primary action for active tab
-$form.CancelButton = $btnExit
 $form.AcceptButton = $btnCreateVM
 $tabControl.Add_SelectedIndexChanged({
     if ($tabControl.SelectedTab -eq $tabCreate) {
@@ -3147,7 +3227,22 @@ Update-VMList
 
 $form.Add_KeyDown({
     param($eventSourceControl, $e)
-    if (-not $e -or -not $e.Control) { return }
+
+    # Escape: confirm before closing
+    if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "Are you sure you want to close the toolkit?",
+            "Confirm Exit",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $form.Close()
+        }
+        $e.SuppressKeyPress = $true
+        return
+    }
+
+    if (-not $e.Control) { return }
 
     if ($e.KeyCode -eq [System.Windows.Forms.Keys]::L) {
         if ($btnClearLog -and $btnClearLog.Enabled) { $btnClearLog.PerformClick() }
@@ -3198,10 +3293,16 @@ $btnBrowseISO.Add_Click({
             Write-Log "Mounting ISO: $($dlg.FileName)"
             $script:MountedISO = Mount-DiskImage -ImagePath $dlg.FileName -PassThru
             Register-TrackedMountedImage -ImagePath $dlg.FileName
-            Start-Sleep -Seconds 2
-            $isoVolume = $script:MountedISO | Get-Volume | Where-Object { $_.DriveLetter }
+
+            # Poll for a drive letter (up to ~10 s) instead of a fixed sleep
+            $isoVolume = $null
+            for ($pollAttempt = 0; $pollAttempt -lt 10; $pollAttempt++) {
+                Start-Sleep -Milliseconds 1000
+                $isoVolume = $script:MountedISO | Get-Volume | Where-Object { $_.DriveLetter }
+                if ($isoVolume -and $isoVolume.DriveLetter) { break }
+            }
             if (-not $isoVolume -or -not $isoVolume.DriveLetter) {
-                Write-Log "ISO mounted but no drive letter was assigned. Try dismounting and re-mounting." "ERROR"
+                Write-Log "ISO mounted but no drive letter was assigned after 10 s. Try dismounting and re-mounting." "ERROR"
                 return
             }
             $isoDrive = $isoVolume.DriveLetter + ":"
@@ -3288,6 +3389,14 @@ function Update-CreateModeUi {
     if ($btnBrowseISO) { $btnBrowseISO.Enabled = -not $isGoldenMode }
     if ($btnBrowseGolden) { $btnBrowseGolden.Enabled = $isGoldenMode }
 
+    # Golden mode skips unattend, so disable user-credential and post-install controls
+    $goldenDisableKeys = @('Username','Password','EnableAutoLogon','Parsec','VBCable','USBMMIDD','RDP','Share','PauseUpdate','FullUpdate')
+    foreach ($key in $goldenDisableKeys) {
+        if ($ctrlCreate.ContainsKey($key) -and $ctrlCreate[$key]) {
+            $ctrlCreate[$key].Enabled = -not $isGoldenMode
+        }
+    }
+
     if ($ctrlCreate.ContainsKey("ModeHint") -and $ctrlCreate["ModeHint"]) {
         if ($isGoldenMode) {
             $ctrlCreate["ModeHint"].Text = "Mode: Golden Image - Uses parent VHDX differencing disk. ISO and edition are ignored."
@@ -3356,13 +3465,22 @@ function Update-CreateValidationHint {
         ($isoPathOk -and $isoMountedMatches -and $wimReady)
     }
     $networkOk = ($switchSelected -or $autoSwitch)
-    $userOk = (-not [string]::IsNullOrWhiteSpace($userName)) -and ($userName -match '^[a-zA-Z0-9]+$') -and ($userName -ne $vmName)
+    $userOk = (-not [string]::IsNullOrWhiteSpace($userName)) -and ($userName -match '^[a-zA-Z0-9]+$') -and ($userName -ine $vmName)
     $passwordOk = (-not [string]::IsNullOrWhiteSpace($passwordText))
+    $passwordWeak = ($passwordOk -and $passwordText.Length -lt 8)
+
+    # Golden image mode uses the embedded user profile — skip user/password checks
+    if ($useGolden) {
+        $userOk = $true
+        $passwordOk = $true
+        $passwordWeak = $false
+    }
 
     $tick = [char]0x2713
     $cross = [char]0x2717
     $isReady = ($nameOk -and $sourceOk -and $networkOk -and $userOk -and $passwordOk)
-    $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross}) | Password $(if($passwordOk){$tick}else{$cross})"
+    $pwLabel = if ($passwordWeak) { "Password(weak)" } else { "Password" }
+    $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross}) | $pwLabel $(if($passwordOk){$tick}else{$cross})"
 
     if ($isReady) {
         $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::LimeGreen
@@ -3538,12 +3656,20 @@ $ctrlCreate["Memory"].Add_ValueChanged({
     }
 })
 
-$ctrlCreate["VMName"].Add_TextChanged({ Update-CreateValidationHint })
-$ctrlCreate["ISOPath"].Add_TextChanged({ Update-CreateValidationHint })
-$ctrlCreate["GoldenParentVHD"].Add_TextChanged({ Update-CreateValidationHint })
-$ctrlCreate["Username"].Add_TextChanged({ Update-CreateValidationHint })
-$ctrlCreate["Password"].Add_TextChanged({ Update-CreateValidationHint })
-$ctrlCreate["Switch"].Add_SelectedIndexChanged({ Update-RoutingHint; Update-CreateValidationHint })
+# Debounce timer: coalesce rapid TextChanged events into a single validation pass (300 ms)
+$script:ValidationTimer = New-Object System.Windows.Forms.Timer
+$script:ValidationTimer.Interval = 300
+$script:ValidationTimer.Add_Tick({
+    $script:ValidationTimer.Stop()
+    Update-CreateValidationHint
+})
+
+$ctrlCreate["VMName"].Add_TextChanged({ $script:ValidationTimer.Stop(); $script:ValidationTimer.Start() })
+$ctrlCreate["ISOPath"].Add_TextChanged({ $script:ValidationTimer.Stop(); $script:ValidationTimer.Start() })
+$ctrlCreate["GoldenParentVHD"].Add_TextChanged({ $script:ValidationTimer.Stop(); $script:ValidationTimer.Start() })
+$ctrlCreate["Username"].Add_TextChanged({ $script:ValidationTimer.Stop(); $script:ValidationTimer.Start() })
+$ctrlCreate["Password"].Add_TextChanged({ $script:ValidationTimer.Stop(); $script:ValidationTimer.Start() })
+$ctrlCreate["Switch"].Add_SelectedIndexChanged({ Update-RoutingHint; $script:ValidationTimer.Stop(); $script:ValidationTimer.Start() })
 
 Update-GpuActionState
 
@@ -3710,11 +3836,13 @@ $btnCreateVM.Add_Click({
         if (-not $UseGoldenImage) {
             if (-not $script:WimFile -or -not (Test-Path $script:WimFile)) { Write-Log "No WIM/ESD file found. Please select an ISO first." "ERROR"; return }
         }
-        if ([string]::IsNullOrWhiteSpace($Username)) { Write-Log "Username is required!" "ERROR"; return }
-        if ($Username -notmatch '^[a-zA-Z0-9]+$') { Write-Log "Username cannot contain special characters." "ERROR"; return }
-        if ($Username -eq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
-        if ([string]::IsNullOrWhiteSpace($PasswordText)) { Write-Log "Password is required for unattended setup." "ERROR"; return }
-        $Password = Convert-PlainTextToSecureString -Text $PasswordText
+        if (-not $UseGoldenImage) {
+            if ([string]::IsNullOrWhiteSpace($Username)) { Write-Log "Username is required!" "ERROR"; return }
+            if ($Username -notmatch '^[a-zA-Z0-9]+$') { Write-Log "Username cannot contain special characters." "ERROR"; return }
+            if ($Username -eq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
+            if ([string]::IsNullOrWhiteSpace($PasswordText)) { Write-Log "Password is required for unattended setup." "ERROR"; return }
+            $Password = Convert-PlainTextToSecureString -Text $PasswordText
+        }
         if ($EnableDynamicMem) {
             if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
                 Write-Log "Dynamic Memory minimum cannot be greater than maximum." "ERROR"
@@ -4217,11 +4345,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             if (-not (Test-Path $GoldenParentVHD)) {
                 throw "Golden parent VHDX not found: $GoldenParentVHD"
             }
-            $destDrive  = (Split-Path -Qualifier $VMLoc)
-            $destFree   = (Get-PSDrive ($destDrive.TrimEnd(':'))).Free
+            $destFreeGB = Get-PathAvailableSpaceGB -Path $VMLoc
             # Differencing disk starts small but grows; ensure at least 2 GB headroom
-            if ($destFree -lt 2GB) {
-                throw "Insufficient disk space on $destDrive for differencing VHDX ($('{0:N1}' -f ($destFree/1GB)) GB free, need >= 2 GB)."
+            if ($destFreeGB -ge 0 -and $destFreeGB -lt 2) {
+                throw "Insufficient disk space for differencing VHDX ($destFreeGB GB free, need >= 2 GB)."
             }
 
             Write-Log "Creating differencing VHDX from parent: $GoldenParentVHD"
@@ -4402,6 +4529,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 Write-Log "Could not restore AutoPlay state: $($_.Exception.Message)" "WARN"
             }
         }
+        # Dispose SecureString password if still alive (e.g. golden mode or early exception)
+        if ($Password) {
+            try { $Password.Dispose() } catch { }
+            $Password = $null
+        }
+        $PasswordText = $null
         $script:IsCreating = $false
         $tabControl.Enabled  = $true
         [void](Update-CreateValidationHint)
@@ -4668,7 +4801,10 @@ $btnUpdateGPU.Add_Click({
                 $copyResult = Copy-GpuDriverFolders -VMName $VMName -MountLetter $mountLetter `
                     -VhdPath $vhdPath -GpuVendor $gpuVendor -SmartCopy $smartCopy -AutoExpand $autoExpand
 
-                if (-not $copyResult) {
+                # Update mount letter in case VHD auto-expand changed the drive letter
+                if ($copyResult.MountLetter) { $mountLetter = $copyResult.MountLetter }
+
+                if (-not $copyResult.Success) {
                     Write-Log "[$VMName] GPU driver copy failed." "ERROR"
                     continue
                 }
@@ -4685,18 +4821,29 @@ $btnUpdateGPU.Add_Click({
                             Write-Log "[$VMName] Copying NVIDIA System32 DLLs..."
                             foreach ($pat in $nvPatterns) {
                                 Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                    -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask $pat
+                                    -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
                             }
                         }
                         "AMD" {
                             Write-Log "[$VMName] Copying AMD System32 DLLs..."
                             Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask "amdkmd*"
+                                -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask "amdkmd*"
                         }
                         "Intel" {
                             Write-Log "[$VMName] Copying Intel System32 DLLs..."
                             Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask "igfx*"
+                                -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask "igfx*"
+                        }
+                        default {
+                            # Unknown vendor with SupportsGpuInstancePath — copy all known vendor DLLs
+                            Write-Log "[$VMName] Copying all known GPU vendor System32 DLLs (vendor: $gpuVendor)..."
+                            $allPatterns = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
+                                             'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
+                                             'nvwgf2*.dll','nvidia*.dll','amdkmd*','igfx*')
+                            foreach ($pat in $allPatterns) {
+                                Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
+                                    -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
+                            }
                         }
                     }
                 } else {
@@ -4708,7 +4855,7 @@ $btnUpdateGPU.Add_Click({
                         Write-Log "[$VMName] Host has NVIDIA GPU, copying NVIDIA DLLs..."
                         foreach ($pat in $nvPatterns) {
                             Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask $pat
+                                -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
                         }
                     }
                 }
@@ -4787,6 +4934,14 @@ $btnUpdateGPU.Add_Click({
 # ---- Form Closing Cleanup ----
 $form.Add_FormClosing({
     Invoke-MountCleanup
+    # Dispose timers
+    if ($script:ValidationTimer)  { $script:ValidationTimer.Stop();  $script:ValidationTimer.Dispose() }
+    if ($script:VmFilterTimer)    { $script:VmFilterTimer.Stop();    $script:VmFilterTimer.Dispose() }
+    # Dispose cached brushes
+    if ($script:TabBrushSelected) { $script:TabBrushSelected.Dispose() }
+    if ($script:TabBrushNormal)   { $script:TabBrushNormal.Dispose() }
+    # Dispose tooltip
+    if ($toolTip)                 { $toolTip.Dispose() }
 })
 
 #endregion
@@ -4810,6 +4965,15 @@ try {
     Write-Host "  $($_.ScriptStackTrace)" -ForegroundColor DarkRed
     Write-Host "`n  Press Enter to exit..." -ForegroundColor Red
     Read-Host
+} finally {
+    # Dispose cached fonts
+    foreach ($f in @($script:FontMain, $script:FontTabHeader, $script:FontHeader, $script:FontBoldButton,
+                     $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:ThemeFontGroupBox)) {
+        if ($f) { try { $f.Dispose() } catch {} }
+    }
+    if ($form) { $form.Dispose() }
 }
+
+exit 0
 
 #endregion

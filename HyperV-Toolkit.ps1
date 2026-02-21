@@ -107,12 +107,12 @@ if ($PSVersionTable.PSEdition -ne 'Desktop') {
     if ($winPsExe -and -not [string]::IsNullOrWhiteSpace($scriptPath) -and (Test-Path $scriptPath)) {
         try {
             Write-StartupTrace -Message "Non-Desktop host detected. Relaunching with Windows PowerShell: $winPsExe"
-            Start-Process -FilePath $winPsExe -ArgumentList @(
+            Start-Process -FilePath $winPsExe -ArgumentList (@(
                 '-NoProfile',
                 '-ExecutionPolicy', 'Bypass',
                 '-Sta',
                 '-File', $scriptPath
-            ) + $script:ForwardedCliArgs | Out-Null
+            ) + $script:ForwardedCliArgs) | Out-Null
             Write-StartupTrace -Message "Relaunch command sent successfully"
             exit 0
         } catch {
@@ -176,12 +176,12 @@ if (-not $isAdmin) {
             $elevatedPowerShell = Join-Path $PSHOME 'powershell.exe'
             if (-not (Test-Path $elevatedPowerShell)) { $elevatedPowerShell = 'PowerShell.exe' }
             Write-StartupTrace -Message "Elevating with executable: $elevatedPowerShell"
-            Start-Process -FilePath $elevatedPowerShell -Verb RunAs -ArgumentList @(
+            Start-Process -FilePath $elevatedPowerShell -Verb RunAs -ArgumentList (@(
                 '-NoProfile',
                 '-ExecutionPolicy', 'RemoteSigned',
                 '-Sta',
                 '-File', $scriptPath
-            ) + $script:ForwardedCliArgs | Out-Null
+            ) + $script:ForwardedCliArgs) | Out-Null
             Write-StartupTrace -Message "Elevation command sent successfully"
             exit 0
         } catch {
@@ -417,10 +417,10 @@ function Write-Log {
     }
 
     $color = switch ($Level) {
-        "ERROR" { $theme.Danger }
-        "WARN"  { $theme.Warning }
-        "OK"    { $theme.Success }
-        default { $theme.Text }
+        "ERROR" { $script:theme.Danger }
+        "WARN"  { $script:theme.Warning }
+        "OK"    { $script:theme.Success }
+        default { $script:theme.Text }
     }
     $script:LogBox.SelectionStart  = $script:LogBox.TextLength
     $script:LogBox.SelectionLength = 0
@@ -443,58 +443,6 @@ function Write-UiWarning {
         Write-Log $Message "WARN"
     } else {
         Write-Output $Message
-    }
-}
-
-function Enable-ControlDoubleBuffer {
-    param([System.Windows.Forms.Control]$Control)
-
-    if (-not $Control) { return }
-    try {
-        $prop = $Control.GetType().GetProperty('DoubleBuffered', [System.Reflection.BindingFlags]'NonPublic,Instance')
-        if ($prop) { $prop.SetValue($Control, $true, $null) }
-    } catch {
-        Write-Verbose "DoubleBuffer enable skipped for $($Control.GetType().Name): $($PSItem.Exception.Message)"
-    }
-}
-
-function Set-UiSpacing {
-    param([System.Windows.Forms.Control]$Root)
-
-    if (-not $Root) { return }
-    foreach ($control in $Root.Controls) {
-        switch ($control.GetType().Name) {
-            'GroupBox' {
-                $control.Padding = New-Object System.Windows.Forms.Padding(10, 18, 10, 10)
-                $control.Margin  = New-Object System.Windows.Forms.Padding(8)
-            }
-            'Button' {
-                $control.Margin  = New-Object System.Windows.Forms.Padding(6)
-                $control.Padding = New-Object System.Windows.Forms.Padding(6, 2, 6, 2)
-            }
-            'CheckBox' {
-                $control.Margin  = New-Object System.Windows.Forms.Padding(6, 4, 6, 4)
-            }
-            'RadioButton' {
-                $control.Margin  = New-Object System.Windows.Forms.Padding(6, 4, 6, 4)
-            }
-            'Label' {
-                $control.Margin  = New-Object System.Windows.Forms.Padding(3)
-            }
-            'TextBox' {
-                $control.Margin  = New-Object System.Windows.Forms.Padding(4)
-            }
-            'ComboBox' {
-                $control.Margin  = New-Object System.Windows.Forms.Padding(4)
-            }
-            'NumericUpDown' {
-                $control.Margin  = New-Object System.Windows.Forms.Padding(4)
-            }
-        }
-
-        if ($control.HasChildren) {
-            Set-UiSpacing -Root $control
-        }
     }
 }
 
@@ -848,6 +796,7 @@ function Start-VMWithRetry {
             }
         }
     }
+    return $false  # safety fallthrough (MaxRetries <= 0 guard)
 }
 
 function Get-PathAvailableSpaceGB {
@@ -1460,13 +1409,13 @@ function Copy-GpuServiceDriver {
                     $null
                 }
                 if ($matchPattern) {
-                    $gpu = Get-PnpDevice | Where-Object {
-                        ($_.DeviceID -like $matchPattern) -and ($_.Status -eq 'OK')
+                    $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object {
+                        $_.DeviceID -like $matchPattern
                     } | Select-Object -First 1
                 }
             }
         } else {
-            $gpu = Get-PnpDevice | Where-Object { ($_.Name -eq $GPUName) -and ($_.Status -eq 'OK') } | Select-Object -First 1
+            $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq $GPUName } | Select-Object -First 1
         }
 
         if (-not $gpu) {
@@ -1477,7 +1426,7 @@ function Copy-GpuServiceDriver {
         $svcName = $gpu.Service
         if (-not $svcName) { return }
 
-        $sysDriver = Get-CimInstance Win32_SystemDriver | Where-Object { $_.Name -eq $svcName }
+        $sysDriver = Get-CimInstance Win32_SystemDriver -Filter "Name='$svcName'" -ErrorAction SilentlyContinue
         if ($sysDriver -and $sysDriver.PathName) {
             # Strip common Win32_SystemDriver PathName prefixes like \??\
             $servicePath = $sysDriver.PathName -replace '^\\\?\?\\', ''
@@ -1960,7 +1909,7 @@ function New-UnattendXml {
       <UserData>
         <AcceptEula>true</AcceptEula>
       </UserData>
-            <EnableFirewall>true</EnableFirewall>
+      <EnableFirewall>true</EnableFirewall>
       <Diagnostics>
         <OptIn>false</OptIn>
       </Diagnostics>
@@ -2915,9 +2864,9 @@ $script:NavButtons  = @()
 $script:NavPanelIdx = 0
 
 function New-NavButton {
-    param([string]$Icon, [string]$Label, [int]$TopOffset)
+    param([string]$Text, [int]$TopOffset)
     $btn = New-Object System.Windows.Forms.Button
-    $btn.Text      = "$Icon   $Label"
+    $btn.Text      = $Text
     $btn.Size      = New-Object System.Drawing.Size(172, 52)
     $btn.Location  = New-Object System.Drawing.Point(0, $TopOffset)
     $btn.FlatStyle = 'Flat'
@@ -2934,9 +2883,9 @@ function New-NavButton {
     return $btn
 }
 
-$btnNavCreate = New-NavButton "+    Create VM"  ""  64
-$btnNavGPU    = New-NavButton "#    GPU Setup"  ""  120
-$btnNavEnv    = New-NavButton "=    Environment" "" 176
+$btnNavCreate = New-NavButton "+    Create VM"    64
+$btnNavGPU    = New-NavButton "#    GPU Setup"    120
+$btnNavEnv    = New-NavButton "=    Environment"  176
 
 $script:NavButtons = @($btnNavCreate, $btnNavGPU, $btnNavEnv)
 
@@ -4011,12 +3960,6 @@ function Update-MainLayout {
     }
 }
 
-# Keep Update-TabLayouts as a no-op shim (called from nothing new but kept for safety)
-function Update-TabLayouts {
-    param([System.Windows.Forms.Form]$RootForm)
-    Update-MainLayout -RootForm $RootForm
-}
-
 $script:LayoutTimer = New-Object System.Windows.Forms.Timer
 $script:LayoutTimer.Interval = 100
 $script:LayoutTimer.Add_Tick({
@@ -4110,11 +4053,6 @@ function Set-ModernTheme {
         }
         if ($control.HasChildren) { Set-ModernTheme -Root $control }
     }
-}
-
-function Set-UiSpacing {
-    param([System.Windows.Forms.Control]$Root)
-    # No-op placeholder kept for backward compatibility
 }
 
 # Apply theme
@@ -6231,7 +6169,8 @@ $form.Add_FormClosing({
     if ($toolTip)                 { $toolTip.Dispose() }
     # Dispose cached fonts (moved here so they survive any final paint events)
     foreach ($f in @($script:FontMain, $script:FontTabHeader, $script:FontHeader, $script:FontBoldButton,
-                     $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:ThemeFontGroupBox)) {
+                     $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:FontSidebarNav,
+                     $script:FontAppTitle, $script:ThemeFontGroupBox)) {
         if ($f) {
             try {
                 $f.Dispose()

@@ -106,13 +106,14 @@ echo  Launching... the console will close automatically.
 echo.
 
 :: ----------------------------------------------------------------
-:: Launch the GUI with a hidden console window.
-:: "start /wait" captures the exit code; "-WindowStyle Hidden"
-:: suppresses the PowerShell console so only the WinForms GUI is visible.
+:: Launch the GUI — invoke PowerShell directly (inheriting this console).
+:: PowerShell processes -WindowStyle Hidden by calling ShowWindow(SW_HIDE)
+:: on the inherited console handle, hiding it after the brief banner flash.
+:: Using "start /wait" would spawn a NEW console that stays visible the
+:: whole time the WinForms GUI runs, so we invoke PowerShell directly.
 :: ----------------------------------------------------------------
 call :log "Launching toolkit (hidden console)"
-start "HyperV-Toolkit" /wait "%POWERSHELL_EXE%" ^
-    -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden ^
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden ^
     -File "%SCRIPT_PATH%"
 
 set "LAUNCH_EXIT_CODE=%errorLevel%"

@@ -1484,11 +1484,75 @@ function Get-GpuPartitionValues {
         return [UInt64]$raw
     }
 
+    $getResourceValues = {
+        param(
+            [UInt64]$Min,
+            [UInt64]$Max,
+            [UInt64]$Optimal,
+            [UInt64]$FallbackBase,
+            [double]$ScaleFactor
+        )
+
+        if ($Max -gt 0) {
+            [UInt64]$effectiveMin = if ($Min -gt 0) { $Min } else { 1 }
+            if ($effectiveMin -gt $Max) { $effectiveMin = $Max }
+
+            [UInt64]$scaled = $effectiveMin
+            if ($Max -gt $effectiveMin) {
+                $range = [double]($Max - $effectiveMin)
+                $rawScaled = [math]::Floor([double]$effectiveMin + ($range * $ScaleFactor))
+                if ($rawScaled -ge [double]$maxU64) {
+                    $scaled = $maxU64
+                } else {
+                    $scaled = [UInt64]$rawScaled
+                }
+            }
+
+            if ($scaled -lt $effectiveMin) { $scaled = $effectiveMin }
+            if ($scaled -gt $Max) { $scaled = $Max }
+
+            [UInt64]$effectiveOptimal = if ($Optimal -gt 0) { $Optimal } else { $scaled }
+            if ($effectiveOptimal -lt $effectiveMin) { $effectiveOptimal = $effectiveMin }
+            if ($effectiveOptimal -gt $Max) { $effectiveOptimal = $Max }
+
+            return @{
+                Supported = $true
+                Min = $effectiveMin
+                Max = $scaled
+                Optimal = $effectiveOptimal
+            }
+        }
+
+        [UInt64]$fallback = & $safeUInt64Mul $FallbackBase $ScaleFactor
+        return @{
+            Supported = $false
+            Min = $fallback
+            Max = $fallback
+            Optimal = $fallback
+        }
+    }
+
     return @{
-        VRAM    = & $safeUInt64Mul $baseVRAM $factor
-        Encode  = & $safeUInt64Mul $baseEncode $factor
-        Decode  = & $safeUInt64Mul $baseDecode $factor
-        Compute = & $safeUInt64Mul $baseCompute $factor
+        VRAM    = if ($adapter) {
+            & $getResourceValues ([UInt64]$adapter.MinPartitionVRAM) ([UInt64]$adapter.MaxPartitionVRAM) ([UInt64]$adapter.OptimalPartitionVRAM) $baseVRAM $factor
+        } else {
+            & $getResourceValues 0 0 0 $baseVRAM $factor
+        }
+        Encode  = if ($adapter) {
+            & $getResourceValues ([UInt64]$adapter.MinPartitionEncode) ([UInt64]$adapter.MaxPartitionEncode) ([UInt64]$adapter.OptimalPartitionEncode) $baseEncode $factor
+        } else {
+            & $getResourceValues 0 0 0 $baseEncode $factor
+        }
+        Decode  = if ($adapter) {
+            & $getResourceValues ([UInt64]$adapter.MinPartitionDecode) ([UInt64]$adapter.MaxPartitionDecode) ([UInt64]$adapter.OptimalPartitionDecode) $baseDecode $factor
+        } else {
+            & $getResourceValues 0 0 0 $baseDecode $factor
+        }
+        Compute = if ($adapter) {
+            & $getResourceValues ([UInt64]$adapter.MinPartitionCompute) ([UInt64]$adapter.MaxPartitionCompute) ([UInt64]$adapter.OptimalPartitionCompute) $baseCompute $factor
+        } else {
+            & $getResourceValues 0 0 0 $baseCompute $factor
+        }
     }
 }
 
@@ -2741,25 +2805,25 @@ function Set-GpuPartitionForVM {
         ErrorAction = 'Stop'
     }
 
-    if ($adapter -and [UInt64]$adapter.MaxPartitionVRAM -gt 0) {
-        $setParams['MinPartitionVRAM'] = $partitionValues.VRAM
-        $setParams['MaxPartitionVRAM'] = $partitionValues.VRAM
-        $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM
+    if ($partitionValues.VRAM.Supported) {
+        $setParams['MinPartitionVRAM'] = $partitionValues.VRAM.Min
+        $setParams['MaxPartitionVRAM'] = $partitionValues.VRAM.Max
+        $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal
     }
-    if ($adapter -and [UInt64]$adapter.MaxPartitionEncode -gt 0) {
-        $setParams['MinPartitionEncode'] = $partitionValues.Encode
-        $setParams['MaxPartitionEncode'] = $partitionValues.Encode
-        $setParams['OptimalPartitionEncode'] = $partitionValues.Encode
+    if ($partitionValues.Encode.Supported) {
+        $setParams['MinPartitionEncode'] = $partitionValues.Encode.Min
+        $setParams['MaxPartitionEncode'] = $partitionValues.Encode.Max
+        $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal
     }
-    if ($adapter -and [UInt64]$adapter.MaxPartitionDecode -gt 0) {
-        $setParams['MinPartitionDecode'] = $partitionValues.Decode
-        $setParams['MaxPartitionDecode'] = $partitionValues.Decode
-        $setParams['OptimalPartitionDecode'] = $partitionValues.Decode
+    if ($partitionValues.Decode.Supported) {
+        $setParams['MinPartitionDecode'] = $partitionValues.Decode.Min
+        $setParams['MaxPartitionDecode'] = $partitionValues.Decode.Max
+        $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal
     }
-    if ($adapter -and [UInt64]$adapter.MaxPartitionCompute -gt 0) {
-        $setParams['MinPartitionCompute'] = $partitionValues.Compute
-        $setParams['MaxPartitionCompute'] = $partitionValues.Compute
-        $setParams['OptimalPartitionCompute'] = $partitionValues.Compute
+    if ($partitionValues.Compute.Supported) {
+        $setParams['MinPartitionCompute'] = $partitionValues.Compute.Min
+        $setParams['MaxPartitionCompute'] = $partitionValues.Compute.Max
+        $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal
     }
 
     try {

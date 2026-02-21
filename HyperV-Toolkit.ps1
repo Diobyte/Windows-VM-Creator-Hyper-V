@@ -39,7 +39,7 @@ if (-not $isAdmin) {
                 '-NoProfile',
                 '-ExecutionPolicy', 'Bypass',
                 '-Sta',
-                '-File', "`"$scriptPath`""
+                '-File', $scriptPath
             ) | Out-Null
             exit 0
         } catch {
@@ -593,7 +593,7 @@ function Convert-SecureStringToPlainText {
     }
 }
 
-function Escape-XmlValue {
+function ConvertTo-XmlEscapedValue {
     param([AllowNull()][string]$Value)
     if ($null -eq $Value) { return "" }
     return [System.Security.SecurityElement]::Escape($Value)
@@ -915,14 +915,14 @@ function New-UnattendXml {
     try { $timezone = (Get-TimeZone).Id }
     catch { $timezone = (Get-WmiObject Win32_TimeZone).StandardName }
 
-    $xmlVMName       = Escape-XmlValue -Value $VMName
-    $xmlUsername     = Escape-XmlValue -Value $Username
-    $xmlPassword     = Escape-XmlValue -Value $passwordPlain
-    $xmlUiLang       = Escape-XmlValue -Value $uiLang
-    $xmlKeyboard     = Escape-XmlValue -Value $keyboard
-    $xmlSystemLoc    = Escape-XmlValue -Value $systemLoc
-    $xmlUserLoc      = Escape-XmlValue -Value $userLoc
-    $xmlTimezone     = Escape-XmlValue -Value $timezone
+    $xmlVMName       = ConvertTo-XmlEscapedValue -Value $VMName
+    $xmlUsername     = ConvertTo-XmlEscapedValue -Value $Username
+    $xmlPassword     = ConvertTo-XmlEscapedValue -Value $passwordPlain
+    $xmlUiLang       = ConvertTo-XmlEscapedValue -Value $uiLang
+    $xmlKeyboard     = ConvertTo-XmlEscapedValue -Value $keyboard
+    $xmlSystemLoc    = ConvertTo-XmlEscapedValue -Value $systemLoc
+    $xmlUserLoc      = ConvertTo-XmlEscapedValue -Value $userLoc
+    $xmlTimezone     = ConvertTo-XmlEscapedValue -Value $timezone
 
     # Build the BypassNRO command for specialize pass (helps Win11 offline setup)
     $bypassBlock = ""

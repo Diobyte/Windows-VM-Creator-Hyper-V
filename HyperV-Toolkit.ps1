@@ -1770,7 +1770,7 @@ $grpConfig           = New-Object System.Windows.Forms.GroupBox
 $grpConfig.Text      = "VM Configuration - Core Settings"
 $grpConfig.ForeColor = $theme.Text
 $grpConfig.Location  = New-Object System.Drawing.Point(8, 18)
-$grpConfig.Size      = New-Object System.Drawing.Size(520, 560)
+$grpConfig.Size      = New-Object System.Drawing.Size(520, 585)
 $grpConfig.BackColor = $theme.Surface
 $tabCreate.Controls.Add($grpConfig)
 
@@ -1867,7 +1867,7 @@ $rowY += 34
 
 $ctrlCreate["DynamicMemMin"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Min (GB):" -ControlType NumericUpDown -ControlWidth 80 `
         -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = 1 }
-$rowY += 34
+$rowY += 38
 
 $ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Max (GB):" -ControlType NumericUpDown -ControlWidth 80 `
         -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(16, $totalRamGB) }
@@ -1939,7 +1939,7 @@ $grpSoft           = New-Object System.Windows.Forms.GroupBox
 $grpSoft.Text      = "Post-Install Software && Advanced"
 $grpSoft.ForeColor = [System.Drawing.Color]::White
 $grpSoft.Location  = New-Object System.Drawing.Point(540, 318)
-$grpSoft.Size      = New-Object System.Drawing.Size(500, 260)
+$grpSoft.Size      = New-Object System.Drawing.Size(500, 270)
 $tabCreate.Controls.Add($grpSoft)
 
 $softwareChecks = @(
@@ -1977,7 +1977,7 @@ $grpSoft.Controls.Add($btnBrowseGolden)
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ModeHint"].Text = "Mode: ISO Deploy - Uses ISO, selected edition, and unattended setup."
 $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 14)
-$ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 586)
+$ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 600)
 $ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
 $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
@@ -1985,7 +1985,7 @@ $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 $btnCreateVM           = New-Object System.Windows.Forms.Button
 $btnCreateVM.Text      = "Create VM"
 $btnCreateVM.Size      = New-Object System.Drawing.Size(140, 36)
-$btnCreateVM.Location  = New-Object System.Drawing.Point(650, 600)
+$btnCreateVM.Location  = New-Object System.Drawing.Point(650, 614)
 $btnCreateVM.FlatStyle = 'Flat'
 $btnCreateVM.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
 $btnCreateVM.ForeColor = [System.Drawing.Color]::White
@@ -1996,7 +1996,7 @@ $tabCreate.Controls.Add($btnCreateVM)
 $ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
 $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 18)
-$ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 604)
+$ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 618)
 $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Cyan
 $tabCreate.Controls.Add($ctrlCreate["CreateStatus"])
 
@@ -2006,7 +2006,7 @@ $ctrlCreate["CreateProgress"].Maximum = 100
 $ctrlCreate["CreateProgress"].Value = 0
 $ctrlCreate["CreateProgress"].Style = 'Continuous'
 $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size(450, 14)
-$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 626)
+$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 640)
 $tabCreate.Controls.Add($ctrlCreate["CreateProgress"])
 
 # ============================================================
@@ -2488,13 +2488,32 @@ $toolTip.SetToolTip($ctrlCreate["VMName"], "Use a short unique VM name (letters,
 $toolTip.SetToolTip($ctrlCreate["ISOPath"], "Windows installation ISO for unattended deployment mode.")
 $toolTip.SetToolTip($ctrlCreate["GoldenParentVHD"], "Parent image used when Golden mode is enabled (differencing disk).")
 $toolTip.SetToolTip($ctrlCreate["CheckpointMode"], "Production/ProductionOnly are recommended over Standard for stable rollback.")
-$toolTip.SetToolTip($ctrlCreate["DynamicMem"], "Enable memory ballooning. Configure min/startup/max below.")
+$toolTip.SetToolTip($ctrlCreate["SecureBoot"], "Enables UEFI Secure Boot for the guest. Required for Windows 11, recommended for most modern Windows images.")
+$toolTip.SetToolTip($ctrlCreate["TPM"], "Adds a virtual TPM device to the VM. Required for Windows 11 and helps with BitLocker/attestation scenarios.")
+$toolTip.SetToolTip($ctrlCreate["VHDType"], "Creates a fixed-size virtual disk. Improves predictable I/O and reduces fragmentation at the cost of longer creation time and full upfront space usage.")
+$toolTip.SetToolTip($ctrlCreate["DynamicMem"], "Enable Hyper-V Dynamic Memory ballooning. Startup/min/max memory values below are used to scale RAM usage at runtime.")
 $toolTip.SetToolTip($ctrlCreate["DynamicMemMin"], "Lowest RAM the VM can shrink to when Dynamic Memory is enabled.")
 $toolTip.SetToolTip($ctrlCreate["DynamicMemMax"], "Highest RAM the VM can grow to when Dynamic Memory is enabled.")
-$toolTip.SetToolTip($ctrlCreate["StrictLegacyMode"], "Forces legacy-safe deployment behavior (non-compact DISM + legacy template order) for older/custom Windows 10 images.")
-$toolTip.SetToolTip($ctrlCreate["AutoCreateSwitch"], "Automatically create an internal NAT switch if selected switch is missing.")
-$toolTip.SetToolTip($ctrlCreate["EnableMetering"], "Collect CPU, memory, network, and disk telemetry for this VM.")
-$toolTip.SetToolTip($ctrlCreate["EnableAutoLogon"], "Automatically signs in the local user for the first setup logons.")
+$toolTip.SetToolTip($ctrlCreate["EnhancedSession"], "Enables Enhanced Session integration (clipboard, dynamic display, device redirection) when guest integration services and policy allow it.")
+$toolTip.SetToolTip($ctrlCreate["StartVM"], "Starts the VM automatically after provisioning completes successfully.")
+$toolTip.SetToolTip($ctrlCreate["StrictLegacyMode"], "Forces legacy-safe deployment behavior (non-compact DISM apply + legacy-compatible secure boot template order) for older/custom Windows images.")
+$toolTip.SetToolTip($ctrlCreate["AutoCreateSwitch"], "If selected switch is missing or blank, automatically creates/uses an internal NAT switch so first boot has network routing without manual setup.")
+$toolTip.SetToolTip($ctrlCreate["EnableMetering"], "Enables Hyper-V resource metering and exports an initial usage snapshot (CPU, memory, disk). Useful for capacity tracking.")
+$toolTip.SetToolTip($ctrlCreate["EnableAutoLogon"], "Automatically signs in the configured local account during initial setup logons. Disable for stricter credential posture.")
+$toolTip.SetToolTip($ctrlCreate["Parsec"], "Downloads and installs Parsec silently in SetupComplete (signature-validated). Useful for low-latency remote streaming workflows.")
+$toolTip.SetToolTip($ctrlCreate["VBCable"], "Installs VB-Audio virtual cable to route virtual audio devices in the guest. Good for streaming/remote desktop audio workflows.")
+$toolTip.SetToolTip($ctrlCreate["USBMMIDD"], "Installs a virtual display driver to provide a persistent headless display target in remote sessions.")
+$toolTip.SetToolTip($ctrlCreate["RDP"], "Enables Remote Desktop and firewall rules in the guest after setup.")
+$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a desktop folder inside the guest with permissive access for quick host/guest file transfer.")
+$toolTip.SetToolTip($ctrlCreate["PauseUpdate"], "Pauses Windows Updates for an extended period after deployment. Useful for preserving known-good driver states.")
+$toolTip.SetToolTip($ctrlCreate["FullUpdate"], "Runs a full Windows Update sequence at first logon using PSWindowsUpdate (can take significant time and may reboot).")
+$toolTip.SetToolTip($ctrlCreate["NestedVirt"], "Exposes virtualization extensions to the guest so it can run Hyper-V/WSL2/other nested hypervisors.")
+$toolTip.SetToolTip($ctrlCreate["NestedNetFollowup"], "Enables MAC spoofing follow-up required by many nested networking/routing scenarios. Requires Nested Virtualization.")
+$toolTip.SetToolTip($ctrlCreate["ResetBootOrder"], "If ISO recovery boot was used, resets firmware boot order back to VHD after first successful start.")
+$toolTip.SetToolTip($ctrlCreate["GoldenImage"], "Creates the VM from a parent golden VHDX using a differencing disk. Faster provisioning, but parent disk must remain available.")
+$toolTip.SetToolTip($ctrlGPU["StartVM"], "Starts selected VMs automatically after GPU adapter update and driver injection.")
+$toolTip.SetToolTip($ctrlGPU["AutoExpand"], "Automatically expands guest VHD if space is insufficient during driver copy to avoid mid-process failures.")
+$toolTip.SetToolTip($ctrlGPU["CopySvcDriver"], "Copies GPU service driver components into the guest HostDriverStore for improved compatibility on some driver stacks.")
 $toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"], "Controls GPU partition resource share assigned to the VM.")
 $toolTip.SetToolTip($btnUpdateGPU, "Inject/update GPU-P drivers and optional services into selected VMs.")
 $toolTip.SetToolTip($ctrlGPU["VmSearch"], "Type to quickly filter VMs by name.")
@@ -2635,6 +2654,31 @@ $ctrlCreate["GoldenImage"].Add_CheckedChanged({
 })
 
 Update-CreateModeUi
+
+# Keep NAT/routing-related checkboxes in a valid state
+$ctrlCreate["AutoCreateSwitch"].Add_CheckedChanged({
+    if (-not $ctrlCreate["AutoCreateSwitch"].Checked) {
+        $selectedSwitch = $ctrlCreate["Switch"].SelectedItem
+        if (-not $selectedSwitch -or [string]::IsNullOrWhiteSpace([string]$selectedSwitch)) {
+            Write-Log "Auto-create NAT switch was disabled with no selected switch. Re-enabling to avoid network provisioning failure." "WARN"
+            $ctrlCreate["AutoCreateSwitch"].Checked = $true
+        }
+    }
+})
+
+$ctrlCreate["NestedVirt"].Add_CheckedChanged({
+    if (-not $ctrlCreate["NestedVirt"].Checked -and $ctrlCreate["NestedNetFollowup"].Checked) {
+        $ctrlCreate["NestedNetFollowup"].Checked = $false
+        Write-Log "Nested Net follow-up was disabled because Nested Virtualization is off." "INFO"
+    }
+})
+
+$ctrlCreate["NestedNetFollowup"].Add_CheckedChanged({
+    if ($ctrlCreate["NestedNetFollowup"].Checked -and -not $ctrlCreate["NestedVirt"].Checked) {
+        $ctrlCreate["NestedVirt"].Checked = $true
+        Write-Log "Nested Virtualization was automatically enabled because Nested Net follow-up requires it." "INFO"
+    }
+})
 
 # ---- Update OS info when edition changes ----
 $ctrlCreate["Edition"].Add_SelectedIndexChanged({

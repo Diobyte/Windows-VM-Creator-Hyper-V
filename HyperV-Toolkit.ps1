@@ -1649,8 +1649,8 @@ Write-Host "  [7/7] Building interface..." -ForegroundColor DarkGray
 # ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
 $form.Text              = "Hyper-V Toolkit - Version 1 - Diobyte - Made with love"
-$form.Size              = New-Object System.Drawing.Size(1300, 860)
-$form.MinimumSize       = New-Object System.Drawing.Size(1240, 820)
+$form.Size              = New-Object System.Drawing.Size(1420, 930)
+$form.MinimumSize       = New-Object System.Drawing.Size(1320, 860)
 $form.FormBorderStyle   = 'Sizable'
 $form.MaximizeBox       = $true
 $form.StartPosition     = "CenterScreen"
@@ -1680,7 +1680,7 @@ $theme = @{
 # ---- Tab Control ----
 $tabControl            = New-Object System.Windows.Forms.TabControl
 $tabControl.Location   = New-Object System.Drawing.Point(10, 8)
-$tabControl.Size       = New-Object System.Drawing.Size(1205, 560)
+$tabControl.Size       = New-Object System.Drawing.Size(1310, 700)
 $tabControl.Font       = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
 $tabControl.DrawMode   = [System.Windows.Forms.TabDrawMode]::OwnerDrawFixed
 $tabControl.ItemSize   = New-Object System.Drawing.Size(150, 32)
@@ -1772,13 +1772,13 @@ $grpConfig           = New-Object System.Windows.Forms.GroupBox
 $grpConfig.Text      = "VM Configuration - Core Settings"
 $grpConfig.ForeColor = $theme.Text
 $grpConfig.Location  = New-Object System.Drawing.Point(8, 18)
-$grpConfig.Size      = New-Object System.Drawing.Size(460, 445)
+$grpConfig.Size      = New-Object System.Drawing.Size(520, 560)
 $grpConfig.BackColor = $theme.Surface
 $tabCreate.Controls.Add($grpConfig)
 
 $rowY = 22
 $ctrlCreate["VMName"] = New-LabeledControl $grpConfig 12 $rowY "VM Name:" -ControlWidth 300
-$rowY += 32
+$rowY += 36
 
 $ctrlCreate["VMLocation"] = New-LabeledControl $grpConfig 12 $rowY "VM Location:" -ControlWidth 240
 $btnBrowseVM = New-Object System.Windows.Forms.Button
@@ -1789,7 +1789,7 @@ $btnBrowseVM.FlatStyle = 'Flat'
 $grpConfig.Controls.Add($btnBrowseVM)
 # Default VM location
 try { $ctrlCreate["VMLocation"].Text = (Get-VMHost).VirtualMachinePath } catch { $ctrlCreate["VMLocation"].Text = "C:\HyperV" }
-$rowY += 32
+$rowY += 36
 
 $ctrlCreate["ISOPath"] = New-LabeledControl $grpConfig 12 $rowY "ISO File:" -ControlWidth 240
 $btnBrowseISO = New-Object System.Windows.Forms.Button
@@ -1798,14 +1798,14 @@ $btnBrowseISO.Size     = New-Object System.Drawing.Size(52, 24)
 $btnBrowseISO.Location = New-Object System.Drawing.Point(365, $rowY)
 $btnBrowseISO.FlatStyle = 'Flat'
 $grpConfig.Controls.Add($btnBrowseISO)
-$rowY += 32
+$rowY += 36
 
 $ctrlCreate["Edition"] = New-LabeledControl $grpConfig 12 $rowY "Win Edition:" -ControlType ComboBox -ControlWidth 300
-$rowY += 30
+$rowY += 34
 
 # OS Detection label (auto-filled)
 $ctrlCreate["OSInfo"] = New-LabeledControl $grpConfig 12 $rowY "Detected OS:" -ControlType Label -ControlWidth 300 -ControlProps @{ AutoSize = $true; Text = "(select an ISO to detect)" }
-$rowY += 28
+$rowY += 32
 
 # Separator
 $sep1 = New-Object System.Windows.Forms.Label
@@ -1814,16 +1814,16 @@ $sep1.BorderStyle = 'Fixed3D'
 $sep1.Size      = New-Object System.Drawing.Size(430, 2)
 $sep1.Location  = New-Object System.Drawing.Point(12, $rowY)
 $grpConfig.Controls.Add($sep1)
-$rowY += 10
+$rowY += 14
 
 $ctrlCreate["Username"] = New-LabeledControl $grpConfig 12 $rowY "Local User:" -ControlWidth 200
 $ctrlCreate["Username"].Text = "User"
-$rowY += 32
+$rowY += 36
 
 $ctrlCreate["Password"] = New-LabeledControl $grpConfig 12 $rowY "Password:" -ControlWidth 200
 $ctrlCreate["Password"].Text = ""
 $ctrlCreate["Password"].UseSystemPasswordChar = $true
-$rowY += 32
+$rowY += 36
 
 # Separator
 $sep2 = New-Object System.Windows.Forms.Label
@@ -1832,20 +1832,20 @@ $sep2.BorderStyle = 'Fixed3D'
 $sep2.Size      = New-Object System.Drawing.Size(430, 2)
 $sep2.Location  = New-Object System.Drawing.Point(12, $rowY)
 $grpConfig.Controls.Add($sep2)
-$rowY += 10
+$rowY += 14
 
 $ctrlCreate["vCPU"] = New-LabeledControl $grpConfig 12 $rowY "vCPUs:" -ControlType NumericUpDown -ControlWidth 80 `
     -ControlProps @{ Minimum = 1; Maximum = [Environment]::ProcessorCount; Value = [Math]::Min(4, [Environment]::ProcessorCount) }
-$rowY += 30
+$rowY += 34
 
 $totalRamGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
 $ctrlCreate["Memory"] = New-LabeledControl $grpConfig 12 $rowY "Memory (GB):" -ControlType NumericUpDown -ControlWidth 80 `
     -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(8, $totalRamGB) }
-$rowY += 30
+$rowY += 34
 
 $ctrlCreate["DiskSize"] = New-LabeledControl $grpConfig 12 $rowY "Disk (GB):" -ControlType NumericUpDown -ControlWidth 80 `
     -ControlProps @{ Minimum = 20; Maximum = 2048; Value = 80 }
-$rowY += 30
+$rowY += 34
 
 $ctrlCreate["Switch"] = New-LabeledControl $grpConfig 12 $rowY "Virtual Switch:" -ControlType ComboBox -ControlWidth 200
 try {
@@ -1854,22 +1854,22 @@ try {
 } catch {
     Write-Log "Could not enumerate Hyper-V virtual switches in UI: $($_.Exception.Message)" "WARN"
 }
-$rowY += 30
+$rowY += 34
 
 $ctrlCreate["Resolution"] = New-LabeledControl $grpConfig 12 $rowY "Resolution:" -ControlType ComboBox -ControlWidth 150
 @("800x600","1024x768","1280x720","1280x800","1280x1024","1366x768","1440x900",
   "1600x900","1680x1050","1920x1080") | ForEach-Object { [void]$ctrlCreate["Resolution"].Items.Add($_) }
 $ctrlCreate["Resolution"].SelectedItem = "1920x1080"
-$rowY += 30
+$rowY += 34
 
 $ctrlCreate["CheckpointMode"] = New-LabeledControl $grpConfig 12 $rowY "Checkpoint Mode:" -LabelWidth 135 -ControlType ComboBox -ControlWidth 150
 @("Disabled","Production","ProductionOnly","Standard") | ForEach-Object { [void]$ctrlCreate["CheckpointMode"].Items.Add($_) }
 $ctrlCreate["CheckpointMode"].SelectedItem = "Disabled"
-$rowY += 30
+$rowY += 34
 
 $ctrlCreate["DynamicMemMin"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Min (GB):" -ControlType NumericUpDown -ControlWidth 80 `
         -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = 1 }
-$rowY += 30
+$rowY += 34
 
 $ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Max (GB):" -ControlType NumericUpDown -ControlWidth 80 `
         -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(16, $totalRamGB) }
@@ -1880,15 +1880,15 @@ $ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic M
 $grpBoot           = New-Object System.Windows.Forms.GroupBox
 $grpBoot.Text      = "Boot && Hardware - Security"
 $grpBoot.ForeColor = [System.Drawing.Color]::White
-$grpBoot.Location  = New-Object System.Drawing.Point(478, 18)
-$grpBoot.Size      = New-Object System.Drawing.Size(350, 105)
+$grpBoot.Location  = New-Object System.Drawing.Point(540, 18)
+$grpBoot.Size      = New-Object System.Drawing.Size(500, 124)
 $tabCreate.Controls.Add($grpBoot)
 
 $ctrlCreate["SecureBoot"] = New-Object System.Windows.Forms.CheckBox
 $ctrlCreate["SecureBoot"].Text     = "Secure Boot (auto: ON for Win11, OFF for Win10)"
 $ctrlCreate["SecureBoot"].AutoSize = $true
 $ctrlCreate["SecureBoot"].Checked  = $true
-$ctrlCreate["SecureBoot"].Location = New-Object System.Drawing.Point(12, 24)
+$ctrlCreate["SecureBoot"].Location = New-Object System.Drawing.Point(14, 28)
 $ctrlCreate["SecureBoot"].ForeColor = [System.Drawing.Color]::White
 $grpBoot.Controls.Add($ctrlCreate["SecureBoot"])
 
@@ -1896,7 +1896,7 @@ $ctrlCreate["TPM"] = New-Object System.Windows.Forms.CheckBox
 $ctrlCreate["TPM"].Text     = "Virtual TPM (required for Win11)"
 $ctrlCreate["TPM"].AutoSize = $true
 $ctrlCreate["TPM"].Checked  = $true
-$ctrlCreate["TPM"].Location = New-Object System.Drawing.Point(12, 52)
+$ctrlCreate["TPM"].Location = New-Object System.Drawing.Point(14, 58)
 $ctrlCreate["TPM"].ForeColor = [System.Drawing.Color]::White
 $grpBoot.Controls.Add($ctrlCreate["TPM"])
 
@@ -1904,7 +1904,7 @@ $ctrlCreate["VHDType"] = New-Object System.Windows.Forms.CheckBox
 $ctrlCreate["VHDType"].Text     = "Fixed-size VHD (default: Dynamic / expanding)"
 $ctrlCreate["VHDType"].AutoSize = $true
 $ctrlCreate["VHDType"].Checked  = $false
-$ctrlCreate["VHDType"].Location = New-Object System.Drawing.Point(12, 80)
+$ctrlCreate["VHDType"].Location = New-Object System.Drawing.Point(14, 88)
 $ctrlCreate["VHDType"].ForeColor = [System.Drawing.Color]::White
 $grpBoot.Controls.Add($ctrlCreate["VHDType"])
 
@@ -1912,17 +1912,17 @@ $grpBoot.Controls.Add($ctrlCreate["VHDType"])
 $grpOpts           = New-Object System.Windows.Forms.GroupBox
 $grpOpts.Text      = "VM Options - Runtime"
 $grpOpts.ForeColor = [System.Drawing.Color]::White
-$grpOpts.Location  = New-Object System.Drawing.Point(478, 128)
-$grpOpts.Size      = New-Object System.Drawing.Size(350, 134)
+$grpOpts.Location  = New-Object System.Drawing.Point(540, 148)
+$grpOpts.Size      = New-Object System.Drawing.Size(500, 165)
 $tabCreate.Controls.Add($grpOpts)
 
 $chkNames = @(
-    @{ Key = "DynamicMem";       Text = "Enable Dynamic Memory";       X = 12;  Y = 22; Default = $false },
-    @{ Key = "EnhancedSession";  Text = "Enable Enhanced Session Mode"; X = 12;  Y = 48; Default = $false },
-    @{ Key = "StartVM";          Text = "Start VM after creation";     X = 12;  Y = 74; Default = $true },
-    @{ Key = "StrictLegacyMode"; Text = "Strict Legacy Mode (Win10 fallback)"; X = 12;  Y = 100; Default = $false },
-    @{ Key = "AutoCreateSwitch"; Text = "Auto-create NAT switch";      X = 185; Y = 22; Default = $true },
-    @{ Key = "EnableMetering";   Text = "Enable Resource Metering";    X = 185; Y = 48; Default = $true }
+    @{ Key = "DynamicMem";       Text = "Enable Dynamic Memory";       X = 14;  Y = 28; Default = $false },
+    @{ Key = "EnhancedSession";  Text = "Enable Enhanced Session Mode"; X = 14;  Y = 58; Default = $false },
+    @{ Key = "StartVM";          Text = "Start VM after creation";     X = 14;  Y = 88; Default = $true },
+    @{ Key = "StrictLegacyMode"; Text = "Strict Legacy Mode (Win10 fallback)"; X = 14;  Y = 118; Default = $false },
+    @{ Key = "AutoCreateSwitch"; Text = "Auto-create NAT switch";      X = 274; Y = 28; Default = $true },
+    @{ Key = "EnableMetering";   Text = "Enable Resource Metering";    X = 274; Y = 58; Default = $true }
 )
 foreach ($chk in $chkNames) {
     $cb = New-Object System.Windows.Forms.CheckBox
@@ -1939,22 +1939,22 @@ foreach ($chk in $chkNames) {
 $grpSoft           = New-Object System.Windows.Forms.GroupBox
 $grpSoft.Text      = "Post-Install Software && Advanced"
 $grpSoft.ForeColor = [System.Drawing.Color]::White
-$grpSoft.Location  = New-Object System.Drawing.Point(478, 262)
-$grpSoft.Size      = New-Object System.Drawing.Size(350, 195)
+$grpSoft.Location  = New-Object System.Drawing.Point(540, 318)
+$grpSoft.Size      = New-Object System.Drawing.Size(500, 260)
 $tabCreate.Controls.Add($grpSoft)
 
 $softwareChecks = @(
-    @{ Key = "Parsec";       Text = "Parsec (Per Computer)";  X = 12;  Y = 22 },
-    @{ Key = "VBCable";      Text = "VB-Audio Cable";         X = 185; Y = 22 },
-    @{ Key = "USBMMIDD";     Text = "Virtual Display Driver"; X = 12;  Y = 48 },
-    @{ Key = "RDP";          Text = "Remote Desktop";         X = 185; Y = 48 },
-    @{ Key = "Share";        Text = "Share Folder";           X = 12;  Y = 74 },
-    @{ Key = "PauseUpdate";  Text = "Pause Win Updates";      X = 185; Y = 74 },
-    @{ Key = "FullUpdate";   Text = "Full Win Updates";       X = 12;  Y = 100 },
-    @{ Key = "NestedVirt";   Text = "Nested Virtualization";  X = 185; Y = 100 },
-    @{ Key = "NestedNetFollowup"; Text = "Nested Net (MAC spoofing)"; X = 12;  Y = 126 },
-    @{ Key = "ResetBootOrder";    Text = "Reset boot order after recovery"; X = 185; Y = 126 },
-    @{ Key = "GoldenImage";       Text = "Create from Golden VHDX"; X = 12; Y = 152 }
+    @{ Key = "Parsec";       Text = "Parsec (Per Computer)";  X = 14;  Y = 28 },
+    @{ Key = "VBCable";      Text = "VB-Audio Cable";         X = 274; Y = 28 },
+    @{ Key = "USBMMIDD";     Text = "Virtual Display Driver"; X = 14;  Y = 58 },
+    @{ Key = "RDP";          Text = "Remote Desktop";         X = 274; Y = 58 },
+    @{ Key = "Share";        Text = "Share Folder";           X = 14;  Y = 88 },
+    @{ Key = "PauseUpdate";  Text = "Pause Win Updates";      X = 274; Y = 88 },
+    @{ Key = "FullUpdate";   Text = "Full Win Updates";       X = 14;  Y = 118 },
+    @{ Key = "NestedVirt";   Text = "Nested Virtualization";  X = 274; Y = 118 },
+    @{ Key = "NestedNetFollowup"; Text = "Nested Net (MAC spoofing)"; X = 14;  Y = 148 },
+    @{ Key = "ResetBootOrder";    Text = "Reset boot order after recovery"; X = 274; Y = 148 },
+    @{ Key = "GoldenImage";       Text = "Create from Golden VHDX"; X = 14; Y = 178 }
 )
 foreach ($sw in $softwareChecks) {
     $cb = New-Object System.Windows.Forms.CheckBox
@@ -1967,18 +1967,18 @@ foreach ($sw in $softwareChecks) {
     $ctrlCreate[$sw.Key] = $cb
 }
 
-$ctrlCreate["GoldenParentVHD"] = New-LabeledControl $grpSoft 12 172 "Parent VHDX:" -ControlWidth 230
+$ctrlCreate["GoldenParentVHD"] = New-LabeledControl $grpSoft 14 212 "Parent VHDX:" -ControlWidth 315
 $btnBrowseGolden = New-Object System.Windows.Forms.Button
 $btnBrowseGolden.Text     = "Browse"
 $btnBrowseGolden.Size     = New-Object System.Drawing.Size(52, 24)
-$btnBrowseGolden.Location = New-Object System.Drawing.Point(290, 170)
+$btnBrowseGolden.Location = New-Object System.Drawing.Point(438, 210)
 $btnBrowseGolden.FlatStyle = 'Flat'
 $grpSoft.Controls.Add($btnBrowseGolden)
 
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ModeHint"].Text = "Mode: ISO Deploy - Uses ISO, selected edition, and unattended setup."
 $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 14)
-$ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 432)
+$ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 586)
 $ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
 $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
@@ -1986,7 +1986,7 @@ $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 $btnCreateVM           = New-Object System.Windows.Forms.Button
 $btnCreateVM.Text      = "Create VM"
 $btnCreateVM.Size      = New-Object System.Drawing.Size(140, 36)
-$btnCreateVM.Location  = New-Object System.Drawing.Point(540, 448)
+$btnCreateVM.Location  = New-Object System.Drawing.Point(650, 600)
 $btnCreateVM.FlatStyle = 'Flat'
 $btnCreateVM.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
 $btnCreateVM.ForeColor = [System.Drawing.Color]::White
@@ -1997,7 +1997,7 @@ $tabCreate.Controls.Add($btnCreateVM)
 $ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
 $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 18)
-$ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 452)
+$ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 604)
 $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Cyan
 $tabCreate.Controls.Add($ctrlCreate["CreateStatus"])
 
@@ -2007,7 +2007,7 @@ $ctrlCreate["CreateProgress"].Maximum = 100
 $ctrlCreate["CreateProgress"].Value = 0
 $ctrlCreate["CreateProgress"].Style = 'Continuous'
 $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size(450, 14)
-$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 470)
+$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 626)
 $tabCreate.Controls.Add($ctrlCreate["CreateProgress"])
 
 # ============================================================
@@ -2264,7 +2264,7 @@ $tabGPU.Controls.Add($btnUpdateGPU)
 # ============================================================
 $script:LogBox           = New-Object System.Windows.Forms.RichTextBox
 $script:LogBox.Location  = New-Object System.Drawing.Point(10, 505)
-$script:LogBox.Size      = New-Object System.Drawing.Size(1095, 210)
+$script:LogBox.Size      = New-Object System.Drawing.Size(1200, 130)
 $script:LogBox.ReadOnly  = $true
 $script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(17, 19, 24)
 $script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(166, 243, 160)
@@ -2332,14 +2332,15 @@ function Update-MainLayout {
         $buttonStackGap = 35
 
         $tabWidth = [Math]::Max(900, $RootForm.ClientSize.Width - 2 * $margin)
-        $tabHeight = [Math]::Max(550, [Math]::Min(620, $RootForm.ClientSize.Height - 260))
+        $tabHeight = [Math]::Max(620, [Math]::Min(760, $RootForm.ClientSize.Height - 210))
         $tabControl.Location = New-Object System.Drawing.Point($margin, 8)
         $tabControl.Size = New-Object System.Drawing.Size($tabWidth, $tabHeight)
 
         $logY = $tabControl.Bottom + 12
         $buttonX = [Math]::Max($margin + 600, $RootForm.ClientSize.Width - $rightButtonColWidth - $margin)
         $logWidth = [Math]::Max(500, $buttonX - $margin - $rightButtonGap)
-        $logHeight = [Math]::Max(100, $RootForm.ClientSize.Height - $logY - $margin)
+        $availableLogHeight = $RootForm.ClientSize.Height - $logY - $margin
+        $logHeight = [Math]::Max(90, [Math]::Min(145, $availableLogHeight))
 
         $script:LogBox.Location = New-Object System.Drawing.Point($margin, $logY)
         $script:LogBox.Size = New-Object System.Drawing.Size($logWidth, $logHeight)

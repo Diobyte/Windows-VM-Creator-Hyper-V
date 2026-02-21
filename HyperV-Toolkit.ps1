@@ -1867,11 +1867,11 @@ $ctrlCreate["CheckpointMode"] = New-LabeledControl $grpConfig 12 $rowY "Checkpoi
 $ctrlCreate["CheckpointMode"].SelectedItem = "Disabled"
 $rowY += 34
 
-$ctrlCreate["DynamicMemMin"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Min (GB):" -ControlType NumericUpDown -ControlWidth 80 `
+$ctrlCreate["DynamicMemMin"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Min (GB):" -LabelWidth 140 -ControlType NumericUpDown -ControlWidth 80 `
         -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = 1 }
 $rowY += 38
 
-$ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Max (GB):" -ControlType NumericUpDown -ControlWidth 80 `
+$ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Max (GB):" -LabelWidth 140 -ControlType NumericUpDown -ControlWidth 80 `
         -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(16, $totalRamGB) }
 
 # --- Right Column: Options ---
@@ -2417,41 +2417,47 @@ function Update-TabLayouts {
         $grpBoot.Size = New-Object System.Drawing.Size($rightWidth, 124)
 
         $grpOpts.Location = New-Object System.Drawing.Point($rightX, $grpBoot.Bottom + $sectionGap)
-        $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 165)
+
+        $optsLeftKeys = @("DynamicMem","EnhancedSession","StartVM","StrictLegacyMode")
+        $optsLeftRight = ($optsLeftKeys | ForEach-Object { $ctrlCreate[$_].Right } | Measure-Object -Maximum).Maximum
+        $optsRightStart = [Math]::Max([int]($rightWidth * 0.55), ($optsLeftRight + 18))
+        $optsCanTwoCol = ($rightWidth -ge 500 -and $optsRightStart -le ($rightWidth - 170))
+        $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, (if ($optsCanTwoCol) { 165 } else { 198 }))
 
         $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
         $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 270)
 
-        $twoColRight = ($rightWidth -ge 500)
-        $rightColumnX = if ($twoColRight) { [Math]::Max(250, [int]($rightWidth * 0.55)) } else { 14 }
-
-        if ($twoColRight) {
-            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
-            $ctrlCreate["EnableMetering"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
-            $ctrlCreate["EnableAutoLogon"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
-
-            $ctrlCreate["VBCable"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
-            $ctrlCreate["RDP"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
-            $ctrlCreate["PauseUpdate"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
-            $ctrlCreate["NestedVirt"].Location = New-Object System.Drawing.Point($rightColumnX, 118)
-            $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($rightColumnX, 148)
+        if ($optsCanTwoCol) {
+            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($optsRightStart, 28)
+            $ctrlCreate["EnableMetering"].Location = New-Object System.Drawing.Point($optsRightStart, 58)
+            $ctrlCreate["EnableAutoLogon"].Location = New-Object System.Drawing.Point($optsRightStart, 88)
+            $ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 124)
         } else {
             $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point(14, 58)
             $ctrlCreate["EnableMetering"].Location = New-Object System.Drawing.Point(14, 88)
             $ctrlCreate["EnableAutoLogon"].Location = New-Object System.Drawing.Point(14, 118)
-            $ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 142)
+            $ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 148)
+        }
+        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 36)
 
+        $softLeftKeys = @("Parsec","USBMMIDD","Share","FullUpdate","NestedNetFollowup","GoldenImage")
+        $softLeftRight = ($softLeftKeys | ForEach-Object { $ctrlCreate[$_].Right } | Measure-Object -Maximum).Maximum
+        $softRightStart = [Math]::Max([int]($rightWidth * 0.55), ($softLeftRight + 18))
+        $softCanTwoCol = ($rightWidth -ge 500 -and $softRightStart -le ($rightWidth - 170))
+
+        if ($softCanTwoCol) {
+            $ctrlCreate["VBCable"].Location = New-Object System.Drawing.Point($softRightStart, 28)
+            $ctrlCreate["RDP"].Location = New-Object System.Drawing.Point($softRightStart, 58)
+            $ctrlCreate["PauseUpdate"].Location = New-Object System.Drawing.Point($softRightStart, 88)
+            $ctrlCreate["NestedVirt"].Location = New-Object System.Drawing.Point($softRightStart, 118)
+            $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($softRightStart, 148)
+        } else {
             $ctrlCreate["VBCable"].Location = New-Object System.Drawing.Point(14, 58)
             $ctrlCreate["RDP"].Location = New-Object System.Drawing.Point(14, 88)
             $ctrlCreate["PauseUpdate"].Location = New-Object System.Drawing.Point(14, 118)
             $ctrlCreate["NestedVirt"].Location = New-Object System.Drawing.Point(14, 148)
             $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point(14, 178)
         }
-
-        if ($twoColRight) {
-            $ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 124)
-        }
-        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 30)
 
         $goldenLabelWidth = 95
         $goldenBrowseWidth = 52

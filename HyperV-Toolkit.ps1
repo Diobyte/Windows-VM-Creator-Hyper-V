@@ -175,18 +175,17 @@ try {
             }
         }
     }
-    Remove-Job $featureJob -Force -ErrorAction SilentlyContinue
 } catch {
     Write-StartupTrace -Message "Hyper-V async check failed; attempting direct query" -Level 'WARN'
     Write-Host "    Async check failed, trying direct query..." -ForegroundColor Yellow
-    # Clean up leaked job from failed async attempt
-    if ($featureJob) { Remove-Job $featureJob -Force -ErrorAction SilentlyContinue }
     try {
         $feature = Get-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -ErrorAction SilentlyContinue
     } catch {
         Write-StartupTrace -Message "Hyper-V direct query failed: $($_.Exception.Message)" -Level 'ERROR'
         Write-Host "    Hyper-V check failed: $($_.Exception.Message)" -ForegroundColor Red
     }
+} finally {
+    if ($featureJob) { Remove-Job $featureJob -Force -ErrorAction SilentlyContinue }
 }
 
 # Handle pending-reboot state (Hyper-V enabled but restart not yet done)
@@ -207,6 +206,9 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
         try {
             Enable-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -All -NoRestart -ErrorAction Stop *> $null
             bcdedit /set hypervisorlaunchtype auto *> $null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "    Warning: bcdedit returned exit code $LASTEXITCODE" -ForegroundColor Yellow
+            }
             $restartChoice = [System.Windows.MessageBox]::Show(
                 "Hyper-V has been enabled successfully.`n`nDo you want to restart now?",
                 "Restart Required", "OKCancel", "Question"
@@ -267,12 +269,16 @@ $script:DetectedGuestArch   = $script:HostArch  # guest architecture for unatten
 $script:LogBox              = $null   # Set when GUI is built
 $script:IsCreating          = $false  # Re-entrancy guard for VM creation
 $script:IsUpdatingGPU       = $false  # Re-entrancy guard for GPU update
+$script:SuppressMemEvents   = $false  # Suppress cascading Dynamic Memory ValueChanged events
 $script:GpuSelectedVMs      = @{}     # Persist selected VMs across filter/refresh
 $script:LastLogRefresh      = [DateTime]::MinValue  # Rate-limit LogBox.Refresh()
 $script:LogRefreshIntervalMs = 100                  # Minimum ms between log repaints
 $script:LogMaxLength        = 200000                # Trim log when exceeding ~200KB
 $script:PathCache           = @{}                   # Test-Path cache: path → [result, DateTime]
 $script:PathCacheTtlMs      = 2000                  # Cache TTL for Test-PathCached
+$script:NvidiaDllPatterns   = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
+                                'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
+                                'nvwgf2*.dll','nvidia*.dll')  # NVIDIA System32 DLL patterns (shared)
 
 #endregion
 
@@ -297,6 +303,11 @@ function Test-PathCached {
         $result = Test-Path $Path
     } catch {
         $result = $false
+    }
+    # Evict stale entries when cache grows beyond 500 items to prevent unbounded memory use
+    if ($script:PathCache.Count -gt 500) {
+        $staleKeys = @($script:PathCache.GetEnumerator() | Where-Object { ($now - $_.Value.Time).TotalMilliseconds -ge $script:PathCacheTtlMs } | ForEach-Object { $_.Key })
+        foreach ($k in $staleKeys) { $script:PathCache.Remove($k) }
     }
     $script:PathCache[$Path] = @{ Result = $result; Time = $now }
     return $result
@@ -1484,7 +1495,7 @@ function Invoke-DismApplyImage {
         # Poll the job for incremental progress instead of blocking on Wait-Job
         $timeoutSec = $TimeoutMinutes * 60
         $elapsed = 0
-        $pollInterval = 3  # seconds
+        $pollInterval = 1  # seconds
         $lastPct = -1
         $timedOut = $false
         $allOutput = [System.Collections.Generic.List[string]]::new()
@@ -1668,7 +1679,7 @@ function New-UnattendXml {
     $specRunSyncParts = @()
     for ($i = 0; $i -lt $specDeployCmds.Count; $i++) {
         $order = $i + 1
-        $cmd = $specDeployCmds[$i]
+        $cmd = [System.Security.SecurityElement]::Escape($specDeployCmds[$i])
         $specRunSyncParts += @"
         <RunSynchronousCommand wcm:action="add">
           <Order>$order</Order>
@@ -1748,6 +1759,7 @@ function New-UnattendXml {
         <OptIn>false</OptIn>
       </Diagnostics>
       <UseConfigurationSet>false</UseConfigurationSet>$windowsPeRunSync
+      <ComputerName>$(if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15) } else { $xmlVMName })</ComputerName>
     </component>
   </settings>
 
@@ -1759,7 +1771,7 @@ function New-UnattendXml {
 
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <ComputerName>$xmlVMName</ComputerName>
+      <ComputerName>$(if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15) } else { $xmlVMName })</ComputerName>
       <TimeZone>$xmlTimezone</TimeZone>
     </component>
     <component name="Microsoft-Windows-Security-SPP-UX" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -3954,21 +3966,29 @@ $ctrlCreate["DynamicMem"].Add_CheckedChanged({
 })
 
 $ctrlCreate["DynamicMemMin"].Add_ValueChanged({
-    if ([int]$ctrlCreate["DynamicMemMin"].Value -gt [int]$ctrlCreate["Memory"].Value) {
-        $ctrlCreate["DynamicMemMin"].Value = $ctrlCreate["Memory"].Value
-    }
-    if ([int]$ctrlCreate["DynamicMemMin"].Value -gt [int]$ctrlCreate["DynamicMemMax"].Value) {
-        $ctrlCreate["DynamicMemMax"].Value = $ctrlCreate["DynamicMemMin"].Value
-    }
+    if ($script:SuppressMemEvents) { return }
+    $script:SuppressMemEvents = $true
+    try {
+        if ([int]$ctrlCreate["DynamicMemMin"].Value -gt [int]$ctrlCreate["Memory"].Value) {
+            $ctrlCreate["DynamicMemMin"].Value = $ctrlCreate["Memory"].Value
+        }
+        if ([int]$ctrlCreate["DynamicMemMin"].Value -gt [int]$ctrlCreate["DynamicMemMax"].Value) {
+            $ctrlCreate["DynamicMemMax"].Value = $ctrlCreate["DynamicMemMin"].Value
+        }
+    } finally { $script:SuppressMemEvents = $false }
 })
 
 $ctrlCreate["DynamicMemMax"].Add_ValueChanged({
-    if ([int]$ctrlCreate["DynamicMemMax"].Value -lt [int]$ctrlCreate["Memory"].Value) {
-        $ctrlCreate["DynamicMemMax"].Value = $ctrlCreate["Memory"].Value
-    }
-    if ([int]$ctrlCreate["DynamicMemMax"].Value -lt [int]$ctrlCreate["DynamicMemMin"].Value) {
-        $ctrlCreate["DynamicMemMin"].Value = $ctrlCreate["DynamicMemMax"].Value
-    }
+    if ($script:SuppressMemEvents) { return }
+    $script:SuppressMemEvents = $true
+    try {
+        if ([int]$ctrlCreate["DynamicMemMax"].Value -lt [int]$ctrlCreate["Memory"].Value) {
+            $ctrlCreate["DynamicMemMax"].Value = $ctrlCreate["Memory"].Value
+        }
+        if ([int]$ctrlCreate["DynamicMemMax"].Value -lt [int]$ctrlCreate["DynamicMemMin"].Value) {
+            $ctrlCreate["DynamicMemMin"].Value = $ctrlCreate["DynamicMemMax"].Value
+        }
+    } finally { $script:SuppressMemEvents = $false }
 })
 
 $ctrlCreate["NestedVirt"].Add_CheckedChanged({
@@ -4023,14 +4043,18 @@ $ctrlCreate["Edition"].Add_SelectedIndexChanged({
 })
 
 $ctrlCreate["Memory"].Add_ValueChanged({
+    if ($script:SuppressMemEvents) { return }
     if (-not $ctrlCreate.ContainsKey("DynamicMemMin") -or -not $ctrlCreate.ContainsKey("DynamicMemMax")) { return }
-    $startup = [int]$ctrlCreate["Memory"].Value
-    if ([int]$ctrlCreate["DynamicMemMin"].Value -gt $startup) {
-        $ctrlCreate["DynamicMemMin"].Value = $startup
-    }
-    if ([int]$ctrlCreate["DynamicMemMax"].Value -lt $startup) {
-        $ctrlCreate["DynamicMemMax"].Value = $startup
-    }
+    $script:SuppressMemEvents = $true
+    try {
+        $startup = [int]$ctrlCreate["Memory"].Value
+        if ([int]$ctrlCreate["DynamicMemMin"].Value -gt $startup) {
+            $ctrlCreate["DynamicMemMin"].Value = $startup
+        }
+        if ([int]$ctrlCreate["DynamicMemMax"].Value -lt $startup) {
+            $ctrlCreate["DynamicMemMax"].Value = $startup
+        }
+    } finally { $script:SuppressMemEvents = $false }
 })
 
 # Debounce timer: coalesce rapid TextChanged events into a single validation pass (300 ms)
@@ -4056,6 +4080,13 @@ Update-GpuActionState
 $btnCreateVM.Add_Click({
     # Re-entrancy guard: prevent double-click during VM creation
     if ($script:IsCreating) { return }
+
+    # Confirmation dialog before starting VM creation
+    $confirmResult = [System.Windows.Forms.MessageBox]::Show(
+        "Are you sure you want to create this VM?`n`nThis will allocate disk space and configure Hyper-V resources.",
+        "Confirm VM Creation", [System.Windows.Forms.MessageBoxButtons]::OKCancel, [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($confirmResult -ne [System.Windows.Forms.DialogResult]::OK) { return }
+
     $script:IsCreating = $true
 
     $VMName = ""
@@ -4080,6 +4111,7 @@ $btnCreateVM.Add_Click({
         $Username        = $ctrlCreate["Username"].Text.Trim()
         $PasswordText    = $ctrlCreate["Password"].Text
         $SelectedResolution = [string]$ctrlCreate["Resolution"].SelectedItem
+        if ([string]::IsNullOrWhiteSpace($SelectedResolution)) { $SelectedResolution = "1920x1080" }
         $Password        = $null
         $vCPU            = [int]$ctrlCreate["vCPU"].Value
         $MemGB           = [int]$ctrlCreate["Memory"].Value
@@ -4386,6 +4418,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         if ($ctrlCreate["Parsec"].Checked) {
             $lines += @(
                 ':: --- Parsec ---'
+                'if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (echo [%date% %time%] Parsec install skipped on ARM64 guest architecture >> %LOGFILE% & goto :AfterParsec)'
                 'echo [%date% %time%] Downloading Parsec... >> %LOGFILE%'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://builds.parsecgaming.com/package/parsec-windows.exe'' -OutFile ''%WORKDIR%\parsec.exe''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\parsec.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Parsec'') { throw ''Parsec signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] Parsec download/signature validation failed >> %LOGFILE% & goto :AfterParsec)'
@@ -4524,10 +4557,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $VHDPath = Join-Path $VMLoc "$VMName.vhdx"
             if ($FixedVHD) {
                 Write-Log "Creating fixed VHDX ($DiskGB GB)..."
-                New-VHD -Path $VHDPath -SizeBytes ($DiskGB * 1GB) -Fixed | Out-Null
+                New-VHD -Path $VHDPath -SizeBytes ($DiskGB * 1GB) -Fixed -ErrorAction Stop | Out-Null
             } else {
                 Write-Log "Creating dynamic VHDX ($DiskGB GB max)..."
-                New-VHD -Path $VHDPath -SizeBytes ($DiskGB * 1GB) -Dynamic | Out-Null
+                New-VHD -Path $VHDPath -SizeBytes ($DiskGB * 1GB) -Dynamic -ErrorAction Stop | Out-Null
             }
 
         # ---- Mount VHD and partition ----
@@ -4697,7 +4730,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             if ($vhdMountedForDeploy -and $VHDPath) {
             Update-CreateProgress -Percent 80 -Status "Finalizing disk images..."
             if (Dismount-ImageRetry -ImagePath $VHDPath) {
-                Write-Log "VHD dismounted."
+                Write-Log "VHD dismounted." "OK"
             } else {
                 try {
                     Dismount-VHD -Path $VHDPath -ErrorAction SilentlyContinue
@@ -5219,11 +5252,8 @@ $btnUpdateGPU.Add_Click({
                         "NVIDIA" {
                             # Copy NVIDIA System32 DLLs using targeted patterns to avoid
                             # overwriting unrelated files that happen to start with 'nv'.
-                            $nvPatterns = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
-                                            'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
-                                            'nvwgf2*.dll','nvidia*.dll')
                             Write-Log "[$VMName] Copying NVIDIA System32 DLLs..."
-                            foreach ($pat in $nvPatterns) {
+                            foreach ($pat in $script:NvidiaDllPatterns) {
                                 Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
                                     -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
                             }
@@ -5241,9 +5271,7 @@ $btnUpdateGPU.Add_Click({
                         default {
                             # Unknown vendor with SupportsGpuInstancePath — copy all known vendor DLLs
                             Write-Log "[$VMName] Copying all known GPU vendor System32 DLLs (vendor: $gpuVendor)..."
-                            $allPatterns = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
-                                             'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
-                                             'nvwgf2*.dll','nvidia*.dll','amdkmd*','igfx*')
+                            $allPatterns = $script:NvidiaDllPatterns + @('amdkmd*','igfx*')
                             foreach ($pat in $allPatterns) {
                                 Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
                                     -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
@@ -5253,11 +5281,8 @@ $btnUpdateGPU.Add_Click({
                 } else {
                     # Win10 default - check for NVIDIA
                     if (Test-HostHasNvidiaGpu) {
-                        $nvPatterns = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
-                                        'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
-                                        'nvwgf2*.dll','nvidia*.dll')
                         Write-Log "[$VMName] Host has NVIDIA GPU, copying NVIDIA DLLs..."
-                        foreach ($pat in $nvPatterns) {
+                        foreach ($pat in $script:NvidiaDllPatterns) {
                             Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
                                 -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask $pat
                         }

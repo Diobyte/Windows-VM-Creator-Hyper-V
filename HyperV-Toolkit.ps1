@@ -1619,8 +1619,8 @@ function Copy-GpuReferencedFiles {
         }
 
         if (-not $driverEntries) {
-            Write-Log "Could not resolve Win32_PnPSignedDriver entries for $($gpu.FriendlyName)." "WARN"
-            return @{ Success = $false; Copied = 0 }
+            Write-Log "Could not resolve Win32_PnPSignedDriver entries for $($gpu.FriendlyName). Skipping referenced-file copy and relying on HostDriverStore + service driver copy." "WARN"
+            return @{ Success = $true; Copied = 0 }
         }
 
         $hostWindowsRoot = [System.IO.Path]::GetFullPath($env:WINDIR)
@@ -1672,10 +1672,10 @@ function Copy-GpuReferencedFiles {
         if ($copied -gt 0) {
             Write-Log "Copied $copied referenced GPU driver file(s) to guest Windows paths." "OK"
         } else {
-            Write-Log "No referenced GPU files were copied from Win32_PnPSignedDriver associations." "WARN"
+            Write-Log "No referenced GPU files were copied from Win32_PnPSignedDriver associations. Continuing with HostDriverStore and service driver payloads." "WARN"
         }
 
-        return @{ Success = ($copied -gt 0); Copied = $copied }
+        return @{ Success = $true; Copied = $copied }
     } catch {
         Write-Log "GPU referenced file copy error: $($_.Exception.Message)" "WARN"
         return @{ Success = $false; Copied = $copied }
@@ -6598,9 +6598,8 @@ $btnUpdateGPU.Add_Click({
                 # Copy precise file set referenced by active display driver package(s)
                 $gpuCopyName = if ($providerObj -and $providerObj.Provider) { $providerObj.Friendly } else { "AUTO" }
                 $refCopy = Copy-GpuReferencedFiles -MountLetter $mountLetter -GPUName $gpuCopyName
-                if ($strictChecks -and (-not $refCopy.Success)) {
-                    Write-Log "[$VMName] Strict checks enabled and referenced GPU file copy failed. Skipping VM to avoid unstable boot state." "ERROR"
-                    continue
+                if (-not $refCopy.Success) {
+                    Write-Log "[$VMName] Referenced GPU file copy step reported failure; proceeding with HostDriverStore/service-driver-only path." "WARN"
                 }
 
                 if ($copySvcDriver) {

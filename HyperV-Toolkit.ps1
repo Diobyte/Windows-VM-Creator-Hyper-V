@@ -1109,6 +1109,70 @@ function Set-VMGuestSecureBoot {
     return $false
 }
 
+function Enable-VirtualTpmForVm {
+    param(
+        [Parameter(Mandatory = $true)][string]$VMName,
+        [bool]$GuestIsWindows11 = $false
+    )
+
+    $requiredCmds = @('Set-VMKeyProtector', 'Enable-VMTPM')
+    foreach ($cmd in $requiredCmds) {
+        if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
+            Write-Log "  TPM enable skipped: required Hyper-V command '$cmd' is unavailable on this host." "WARN"
+            return $false
+        }
+    }
+
+    # vTPM for Hyper-V VMs does not require a physical host TPM when using a local key protector.
+    Write-Log "  TPM setup: using local key protector (host physical TPM is not required)." "INFO"
+
+    foreach ($svcName in @('vmcompute', 'vmms')) {
+        try {
+            $svc = Get-Service -Name $svcName -ErrorAction Stop
+            if ($svc.Status -ne 'Running') {
+                Start-Service -Name $svcName -ErrorAction Stop
+                Write-Log "  TPM setup: started required service '$svcName'." "INFO"
+            }
+        } catch {
+            Write-Log "  TPM setup warning: service '$svcName' is not ready: $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    try {
+        Set-VMKeyProtector -VMName $VMName -NewLocalKeyProtector -ErrorAction Stop
+        Enable-VMTPM -VMName $VMName -ErrorAction Stop
+
+        $verified = $false
+        if (Get-Command Get-VMSecurity -ErrorAction SilentlyContinue) {
+            try {
+                $vmSec = Get-VMSecurity -VMName $VMName -ErrorAction Stop
+                if ($vmSec -and $vmSec.TpmEnabled) {
+                    $verified = $true
+                }
+            } catch {
+                Write-Log "  TPM verification warning: $($_.Exception.Message)" "WARN"
+            }
+        }
+
+        if ($verified) {
+            Write-Log "  Virtual TPM: Enabled and verified" "OK"
+        } else {
+            Write-Log "  Virtual TPM: Enable command completed" "OK"
+        }
+
+        if ($GuestIsWindows11) {
+            Write-Log "  TPM 2.0 enabled for Windows 11 compatibility" "INFO"
+        }
+        return $true
+    } catch {
+        Write-Log "  TPM setup failed: $($_.Exception.Message)" "WARN"
+        if ($GuestIsWindows11) {
+            Write-Log "  WARNING: Windows 11 installation may fail without TPM" "WARN"
+        }
+        return $false
+    }
+}
+
 function Convert-SecureStringToPlainText {
     param([AllowNull()][System.Security.SecureString]$SecureString)
     if (-not $SecureString) { return "" }
@@ -5773,28 +5837,9 @@ assign letter=$freeLetter
             Write-Log "  Secure Boot was requested but template configuration could not be fully applied. Verify firmware settings in the VM manually." "WARN"
         }
 
-        # TPM with enhanced validation
+        # TPM setup (host physical TPM not required)
         if ($EnableTPM) {
-            try {
-                # Verify host TPM capability before enabling
-                $tpmInfo = Get-Tpm -ErrorAction SilentlyContinue
-                if (-not $tpmInfo -or -not $tpmInfo.TpmPresent) {
-                    Write-Log "  WARNING: Host TPM not detected. Virtual TPM may not function properly." "WARN"
-                }
-                
-                Set-VMKeyProtector -VMName $VMName -NewLocalKeyProtector -ErrorAction Stop
-                Enable-VMTPM -VMName $VMName -ErrorAction Stop
-                Write-Log "  Virtual TPM: Enabled" "OK"
-                
-                if ($IsWin11) {
-                    Write-Log "  TPM 2.0 enabled for Windows 11 compatibility" "INFO"
-                }
-            } catch {
-                Write-Log "  TPM setup failed: $($_.Exception.Message)" "WARN"
-                if ($IsWin11) {
-                    Write-Log "  WARNING: Windows 11 installation may fail without TPM" "WARN"
-                }
-            }
+            [void](Enable-VirtualTpmForVm -VMName $VMName -GuestIsWindows11 $IsWin11)
         }
 
         # Checkpoints

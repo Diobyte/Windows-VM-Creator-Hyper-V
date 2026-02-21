@@ -1749,12 +1749,12 @@ $tabCreate.AutoScroll  = $true
 $table = New-Object System.Windows.Forms.TableLayoutPanel
 $table.ColumnCount = 2
 $table.RowCount = 4
-$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 520)))
-$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 140)))
-$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 170)))
-$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 250)))
-$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 520)))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 140)))
+[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 170)))
+[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 250)))
+[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 $table.Dock = 'Fill'
 $tabCreate.Controls.Add($table)
 
@@ -2240,7 +2240,11 @@ $ctrlGPU["GpuSelector"].DropDownStyle = 'DropDownList'
 $ctrlGPU["GpuSelector"].Width    = 340
 $ctrlGPU["GpuSelector"].Location = New-Object System.Drawing.Point(95, 25)
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuSelector"])
-$ctrlGPU["GpuSelector"].Add_SelectedIndexChanged({ Update-GpuActionState })
+$ctrlGPU["GpuSelector"].Add_SelectedIndexChanged({
+    if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+        Update-GpuActionState
+    }
+})
 
 # Populate GPU list
 $script:GpuPList = Get-GpuPProviders
@@ -2879,6 +2883,9 @@ $toolTip.SetToolTip($btnClearLog, "Clear the on-screen log output.")
 $toolTip.SetToolTip($btnSaveLog, "Export the current log output to a file.")
 $toolTip.SetToolTip($btnExit, "Close the toolkit and run image mount cleanup.")
 
+# Refresh VM list once tooltips are available so initial checkbox rows receive them.
+Update-VMList
+
 $form.Add_KeyDown({
     param($sender, $e)
     if (-not $e -or -not $e.Control) { return }
@@ -3101,7 +3108,7 @@ function Update-CreateValidationHint {
         } else {
             $missing = @()
             if (-not $nameOk) { $missing += "VM name" }
-            if (-not $sourceOk) { $missing += (if ($useGolden) { "parent VHD" } else { "ISO/source" }) }
+            if (-not $sourceOk) { $missing += $(if ($useGolden) { "parent VHD" } else { "ISO/source" }) }
             if (-not $networkOk) { $missing += "network" }
             if (-not $userOk) { $missing += "user" }
             $ctrlCreate["CreateStatus"].Text = "Fix required: $($missing -join ', ')"
@@ -3119,10 +3126,22 @@ function Update-CreateValidationHint {
 function Update-GpuActionState {
     if (-not $ctrlGPU -or -not $btnUpdateGPU) { return }
 
-    $selectedCount = 0
-    if ($ctrlGPU.ContainsKey("VMCheckboxes") -and $ctrlGPU["VMCheckboxes"]) {
-        $selectedCount = @($ctrlGPU["VMCheckboxes"] | Where-Object { $_ -and $_.Checked }).Count
+    $selectedNames = @()
+    if ($script:GpuSelectedVMs) {
+        $selectedNames += @(
+            $script:GpuSelectedVMs.GetEnumerator() |
+                Where-Object { $_.Value } |
+                ForEach-Object { $_.Key }
+        )
     }
+    if ($ctrlGPU.ContainsKey("VMCheckboxes") -and $ctrlGPU["VMCheckboxes"]) {
+        $selectedNames += @(
+            $ctrlGPU["VMCheckboxes"] |
+                Where-Object { $_ -and $_.Checked } |
+                ForEach-Object { $_.Text }
+        )
+    }
+    $selectedCount = @($selectedNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique).Count
     $hasGpuChoice = ($ctrlGPU.ContainsKey("GpuSelector") -and $ctrlGPU["GpuSelector"] -and $ctrlGPU["GpuSelector"].SelectedIndex -ge 0)
     $canRun = ($selectedCount -gt 0 -and $hasGpuChoice)
 
@@ -4068,9 +4087,21 @@ $btnUpdateGPU.Add_Click({
     try {
         # Gather selections
         $selectedVMs = @()
-        foreach ($cb in $ctrlGPU["VMCheckboxes"]) {
-            if ($cb.Checked) { $selectedVMs += $cb.Text }
+        if ($script:GpuSelectedVMs) {
+            $selectedVMs += @(
+                $script:GpuSelectedVMs.GetEnumerator() |
+                    Where-Object { $_.Value } |
+                    ForEach-Object { $_.Key }
+            )
         }
+        if ($ctrlGPU.ContainsKey("VMCheckboxes") -and $ctrlGPU["VMCheckboxes"]) {
+            $selectedVMs += @(
+                $ctrlGPU["VMCheckboxes"] |
+                    Where-Object { $_ -and $_.Checked } |
+                    ForEach-Object { $_.Text }
+            )
+        }
+        $selectedVMs = @($selectedVMs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
         if ($selectedVMs.Count -eq 0) { Write-Log "No VMs selected!" "ERROR"; return }
 
         $providerObj = $null

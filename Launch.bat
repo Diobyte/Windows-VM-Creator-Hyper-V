@@ -1,6 +1,5 @@
 @echo off
-title Hyper-V Toolkit Launcher - Version 1
-color 0A
+title Hyper-V Toolkit Launcher
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
@@ -11,38 +10,52 @@ set "LAUNCH_LOG=%TEMP%\HyperV-Toolkit-Launcher.log"
 call :log "Launcher started"
 call :log "Script path: %SCRIPT_PATH%"
 
-:: Prefer 64-bit Windows PowerShell even when launched from a 32-bit host
+:: ----------------------------------------------------------------
+:: Prefer 64-bit Windows PowerShell even when launched from 32-bit host
+:: ----------------------------------------------------------------
 if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if defined PROCESSOR_ARCHITEW6432 (
     if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" (
         set "POWERSHELL_EXE=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
-        call :log "Using Sysnative 64-bit PowerShell: %POWERSHELL_EXE%"
+        call :log "Using Sysnative 64-bit PowerShell"
     )
 )
 
 if not exist "%POWERSHELL_EXE%" (
     set "POWERSHELL_EXE=PowerShell.exe"
-    call :log "Fallback to PATH PowerShell.exe"
+    call :log "Fallback: using PATH PowerShell.exe"
 )
 
 call :log "PowerShell executable: %POWERSHELL_EXE%"
 
+:: ----------------------------------------------------------------
+:: Script existence check
+:: ----------------------------------------------------------------
 if not exist "%SCRIPT_PATH%" (
-    call :log "ERROR: script not found"
+    call :log "ERROR: script not found at: %SCRIPT_PATH%"
     echo.
-    echo  ERROR: Could not find "%SCRIPT_PATH%"
+    echo  ERROR: Could not find:
+    echo         %SCRIPT_PATH%
+    echo.
     echo  Press any key to exit...
     pause >nul
     exit /b 1
 )
 
-:: Check for admin privileges using WindowsPrincipal (works even if Server service is disabled)
-"%POWERSHELL_EXE%" -NoProfile -Command "$p=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent(); if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 0}else{exit 1}" >nul 2>&1
+:: ----------------------------------------------------------------
+:: Admin check (uses WindowsPrincipal — works without Server service)
+:: ----------------------------------------------------------------
+"%POWERSHELL_EXE%" -NoProfile -Command ^
+    "$p=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent();" ^
+    "if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 0}else{exit 1}" >nul 2>&1
+
 if %errorLevel% neq 0 (
-    call :log "Not elevated; requesting RunAs"
+    call :log "Not elevated — requesting RunAs"
     if /i "%~1"=="--elevated" (
         call :log "ERROR: elevation failed or was declined"
         echo.
-        echo  ERROR: UAC elevation failed or was declined. Please run as Administrator.
+        echo  ERROR: UAC elevation failed or was declined.
+        echo  Please right-click Launch.bat and choose "Run as administrator".
+        echo.
         echo  Press any key to exit...
         pause >nul
         exit /b 1
@@ -51,11 +64,16 @@ if %errorLevel% neq 0 (
     echo  Requesting administrator privileges...
     echo.
     set "LAUNCHER_PATH=%~f0"
-    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "try { $launcher = $env:LAUNCHER_PATH; Start-Process -FilePath $launcher -Verb RunAs -ArgumentList @('--elevated') -ErrorAction Stop; exit 0 } catch { exit 1 }"
+    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+        "try { Start-Process -FilePath $env:LAUNCHER_PATH -Verb RunAs" ^
+        "      -ArgumentList '--elevated' -ErrorAction Stop; exit 0" ^
+        "} catch { exit 1 }" >nul 2>&1
     if %errorLevel% neq 0 (
-        call :log "ERROR: elevation request failed or was declined"
+        call :log "ERROR: elevation request failed"
         echo.
-        echo  ERROR: UAC elevation failed or was declined. Please run as Administrator.
+        echo  ERROR: Could not request elevation.
+        echo  Please right-click Launch.bat and choose "Run as administrator".
+        echo.
         echo  Press any key to exit...
         pause >nul
         exit /b 1
@@ -64,38 +82,56 @@ if %errorLevel% neq 0 (
     exit /b
 )
 
+:: ----------------------------------------------------------------
+:: Elevated instance setup
+:: ----------------------------------------------------------------
 if /i "%~1"=="--elevated" (
-    title Hyper-V Toolkit Launcher - Version 1 [Administrator]
-    call :log "Running in elevated launcher instance"
+    title Hyper-V Toolkit Launcher  [Administrator]
+    call :log "Running elevated launcher instance"
     shift
 )
 
-:: Change to script directory
 cd /d "%SCRIPT_DIR%"
 
+:: ----------------------------------------------------------------
+:: Banner
+:: ----------------------------------------------------------------
+color 0A
 echo.
 echo  =============================================
-echo   Hyper-V Toolkit ^| Version 1 ^| Diobyte ^| Made with love
+echo   Hyper-V VM Creator  ^|  Diobyte
 echo  =============================================
 echo.
-echo  Script: %SCRIPT_PATH%
-echo  Launching toolkit...
+echo  Launching... the console will close automatically.
 echo.
 
-"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Sta -File "%SCRIPT_PATH%"
+:: ----------------------------------------------------------------
+:: Launch the GUI with a hidden console window.
+:: "start /wait" captures the exit code; "-WindowStyle Hidden"
+:: suppresses the PowerShell console so only the WinForms GUI is visible.
+:: ----------------------------------------------------------------
+call :log "Launching toolkit (hidden console)"
+start "HyperV-Toolkit" /wait "%POWERSHELL_EXE%" ^
+    -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden ^
+    -File "%SCRIPT_PATH%"
 
 set "LAUNCH_EXIT_CODE=%errorLevel%"
 call :log "Toolkit exited with code: %LAUNCH_EXIT_CODE%"
 
 if %LAUNCH_EXIT_CODE% neq 0 (
+    color 0C
     echo.
-    echo  Launcher detected a startup error. Press any key to exit...
+    echo  The toolkit exited with an error (code: %LAUNCH_EXIT_CODE%).
+    echo  Check the log: %LAUNCH_LOG%
+    echo.
+    echo  Press any key to exit...
     pause >nul
 )
 
 endlocal
 exit /b %LAUNCH_EXIT_CODE%
 
+:: ----------------------------------------------------------------
 :log
 echo [%date% %time%] %~1>>"%LAUNCH_LOG%"
 goto :eof

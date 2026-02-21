@@ -2552,113 +2552,34 @@ function Set-GpuPartitionForVM {
 
 Write-Host "  [7/7] Building interface..." -ForegroundColor DarkGray
 
-# ============================================================
-#  FONT CACHE
-# ============================================================
-$script:FontMain          = New-Object System.Drawing.Font("Segoe UI", 9.5)
-$script:FontTabHeader     = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$script:FontHeader        = New-Object System.Drawing.Font("Segoe UI", 8.75)
-$script:FontBoldButton    = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$script:FontSmall         = New-Object System.Drawing.Font("Segoe UI", 8.25)
-$script:FontBoldLabel     = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$script:FontConsolas      = New-Object System.Drawing.Font("Consolas", 9.5)
-$script:FontSidebarNav    = New-Object System.Drawing.Font("Segoe UI", 10.5)
-$script:FontAppTitle      = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
-$script:ThemeFontGroupBox = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+# ---- Shared Font Cache (disposed on close) ----
+$script:FontMain       = New-Object System.Drawing.Font("Segoe UI", 9.75)
+$script:FontTabHeader  = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$script:FontHeader     = New-Object System.Drawing.Font("Segoe UI", 8.75)
+$script:FontBoldButton = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$script:FontSmall      = New-Object System.Drawing.Font("Segoe UI", 8)
+$script:FontBoldLabel  = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$script:FontConsolas   = New-Object System.Drawing.Font("Consolas", 9.5)
 
-# ============================================================
-#  COLOUR PALETTE  (VS Code-inspired charcoal dark theme)
-# ============================================================
-try {
-    $theme = @{
-        Bg            = [System.Drawing.Color]::FromArgb(30,  30,  30)
-        Sidebar       = [System.Drawing.Color]::FromArgb(37,  37,  38)
-        SidebarHov    = [System.Drawing.Color]::FromArgb(50,  50,  52)
-        SidebarActive = [System.Drawing.Color]::FromArgb(0,   100, 177)
-        SidebarAccent = [System.Drawing.Color]::FromArgb(0,   120, 215)
-        Card          = [System.Drawing.Color]::FromArgb(43,  43,  45)
-        Surface       = [System.Drawing.Color]::FromArgb(55,  55,  58)
-        Input         = [System.Drawing.Color]::FromArgb(60,  60,  63)
-        InputFocus    = [System.Drawing.Color]::FromArgb(74,  74,  78)
-        Border        = [System.Drawing.Color]::FromArgb(68,  68,  72)
-        BorderFocus   = [System.Drawing.Color]::FromArgb(0,   122, 204)
-        HeaderBar     = [System.Drawing.Color]::FromArgb(0,   40,  80)
-        Text          = [System.Drawing.Color]::FromArgb(204, 204, 204)
-        TextHigh      = [System.Drawing.Color]::FromArgb(255, 255, 255)
-        TextSecondary = [System.Drawing.Color]::FromArgb(180, 190, 210)
-        TextMuted     = [System.Drawing.Color]::FromArgb(133, 133, 140)
-        Muted         = [System.Drawing.Color]::FromArgb(133, 133, 140)
-        Accent        = [System.Drawing.Color]::FromArgb(0,   120, 212)
-        AccentHover   = [System.Drawing.Color]::FromArgb(28,  140, 228)
-        AccentPressed = [System.Drawing.Color]::FromArgb(0,   100, 190)
-        Success       = [System.Drawing.Color]::FromArgb(78,  201, 176)
-        SuccessHover  = [System.Drawing.Color]::FromArgb(58,  175, 152)
-        Warning       = [System.Drawing.Color]::FromArgb(220, 170, 20)
-        WarningHover  = [System.Drawing.Color]::FromArgb(190, 148, 10)
-        Danger        = [System.Drawing.Color]::FromArgb(241, 76,  76)
-        DangerHover   = [System.Drawing.Color]::FromArgb(205, 49,  49)
-        Info          = [System.Drawing.Color]::FromArgb(86,  156, 214)
-        InfoHover     = [System.Drawing.Color]::FromArgb(60,  130, 190)
-    }
-    Write-StartupTrace -Message "Theme palette created successfully"
-} catch {
-    Write-StartupTrace -Message "Theme palette creation failed: $($_.Exception.Message)" -Level 'ERROR'
-    $theme = @{
-        Bg            = [System.Drawing.SystemColors]::ControlDarkDark
-        Sidebar       = [System.Drawing.SystemColors]::ControlDark
-        SidebarHov    = [System.Drawing.SystemColors]::Control
-        SidebarActive = [System.Drawing.SystemColors]::Highlight
-        SidebarAccent = [System.Drawing.SystemColors]::Highlight
-        Card          = [System.Drawing.SystemColors]::Control
-        Surface       = [System.Drawing.SystemColors]::Control
-        Input         = [System.Drawing.SystemColors]::Window
-        InputFocus    = [System.Drawing.SystemColors]::Window
-        Border        = [System.Drawing.SystemColors]::ControlDark
-        BorderFocus   = [System.Drawing.SystemColors]::Highlight
-        HeaderBar     = [System.Drawing.SystemColors]::ControlDarkDark
-        Text          = [System.Drawing.SystemColors]::ControlText
-        TextHigh      = [System.Drawing.SystemColors]::ControlText
-        TextSecondary = [System.Drawing.SystemColors]::ControlText
-        TextMuted     = [System.Drawing.SystemColors]::GrayText
-        Muted         = [System.Drawing.SystemColors]::GrayText
-        Accent        = [System.Drawing.SystemColors]::Highlight
-        AccentHover   = [System.Drawing.SystemColors]::Highlight
-        AccentPressed = [System.Drawing.SystemColors]::Highlight
-        Success       = [System.Drawing.Color]::Green
-        SuccessHover  = [System.Drawing.Color]::DarkGreen
-        Warning       = [System.Drawing.Color]::Orange
-        WarningHover  = [System.Drawing.Color]::DarkOrange
-        Danger        = [System.Drawing.Color]::Red
-        DangerHover   = [System.Drawing.Color]::DarkRed
-        Info          = [System.Drawing.Color]::CornflowerBlue
-        InfoHover     = [System.Drawing.Color]::Blue
-    }
-}
-
-# ============================================================
-#  MAIN FORM
-# ============================================================
+# ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
-$form.Text            = "Hyper-V Toolkit  —  Version 1  —  Diobyte"
-$form.Size            = New-Object System.Drawing.Size(1280, 880)
-$form.MinimumSize     = New-Object System.Drawing.Size(1100, 760)
-$form.FormBorderStyle = 'Sizable'
-$form.MaximizeBox     = $true
-$form.StartPosition   = "CenterScreen"
-$form.Font            = $script:FontMain
-$form.BackColor       = $theme.Bg
-$form.ForeColor       = $theme.Text
-$form.AutoScaleMode   = [System.Windows.Forms.AutoScaleMode]::Font
-$form.KeyPreview      = $true
-$form.Padding         = New-Object System.Windows.Forms.Padding(0)
+$form.Text              = "Hyper-V Toolkit - Version 1 - Diobyte - Made with love"
+$form.Size              = New-Object System.Drawing.Size(1200, 800)
+$form.MinimumSize       = New-Object System.Drawing.Size(1100, 750)
+$form.FormBorderStyle   = 'Sizable'
+$form.MaximizeBox       = $true
+$form.StartPosition     = "CenterScreen"
+$form.Font              = $script:FontMain
+$form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Font
+# $form.BackColor         = $theme.Bg
+# $form.ForeColor         = $theme.Text
+$form.Padding           = New-Object System.Windows.Forms.Padding(8)
+$form.KeyPreview        = $true
 
-# ============================================================
-#  MENU STRIP (minimal)
-# ============================================================
+# Menu Strip
 $menuStrip = New-Object System.Windows.Forms.MenuStrip
-$menuStrip.BackColor = $theme.Sidebar
-$menuStrip.ForeColor = $theme.Text
-$menuStrip.RenderMode = [System.Windows.Forms.ToolStripRenderMode]::Professional
+# $menuStrip.BackColor = $theme.Card
+# $menuStrip.ForeColor = $theme.Text
 
 $fileMenu = New-Object System.Windows.Forms.ToolStripMenuItem
 $fileMenu.Text = "&File"
@@ -2671,7 +2592,6 @@ $menuStrip.Items.Add($fileMenu)
 
 $viewMenu = New-Object System.Windows.Forms.ToolStripMenuItem
 $viewMenu.Text = "&View"
-
 $clearLogItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $clearLogItem.Text = "&Clear Log"
 $clearLogItem.Add_Click({ $script:LogBox.Clear() })
@@ -2685,7 +2605,9 @@ $aboutItem.Text = "&About"
 $aboutItem.Add_Click({
     [System.Windows.Forms.MessageBox]::Show(
         "Hyper-V Toolkit v1`nCreated by Diobyte`nMade with love",
-        "About", "OK", "Information"
+        "About",
+        "OK",
+        "Information"
     )
 })
 $helpMenu.DropDownItems.Add($aboutItem)
@@ -2694,301 +2616,204 @@ $menuStrip.Items.Add($helpMenu)
 $form.MainMenuStrip = $menuStrip
 $form.Controls.Add($menuStrip)
 
-# ============================================================
-#  STATUS STRIP
-# ============================================================
+# Status Bar
 $statusStrip = New-Object System.Windows.Forms.StatusStrip
-$statusStrip.BackColor = $theme.Card
-$statusStrip.ForeColor = $theme.TextMuted
+# $statusStrip.BackColor = $theme.Card
+# $statusStrip.ForeColor = $theme.Text
 
 $statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-$statusLabel.Text    = "Ready"
+$statusLabel.Text = "Ready"
 $statusLabel.AutoSize = $true
 $statusStrip.Items.Add($statusLabel)
 
 $progressBar = New-Object System.Windows.Forms.ToolStripProgressBar
-$progressBar.Visible  = $false
-$progressBar.Minimum  = 0
-$progressBar.Maximum  = 100
-$progressBar.Width    = 200
+$progressBar.Visible = $false
+$progressBar.Minimum = 0
+$progressBar.Maximum = 100
+$progressBar.Width = 200
 $statusStrip.Items.Add($progressBar)
 
-$script:StatusLabel       = $statusLabel
+$script:StatusLabel = $statusLabel
 $script:StatusProgressBar = $progressBar
 
 function Update-StatusBar {
     param([string]$Message = "Ready", [int]$Progress = -1)
-    if ($script:StatusLabel)       { $script:StatusLabel.Text = $Message }
+    
+    if ($script:StatusLabel) {
+        $script:StatusLabel.Text = $Message
+    }
+    
     if ($script:StatusProgressBar) {
         if ($Progress -ge 0) {
             $script:StatusProgressBar.Visible = $true
-            $script:StatusProgressBar.Value   = [Math]::Min(100, [Math]::Max(0, $Progress))
+            $script:StatusProgressBar.Value = [Math]::Min(100, [Math]::Max(0, $Progress))
         } else {
             $script:StatusProgressBar.Visible = $false
         }
-    }
-    if ($script:HeaderStatusLabel) {
-        $script:HeaderStatusLabel.Text = "  $Message"
-        $lc = $Message.ToLower()
-        $script:HeaderStatusLabel.ForeColor = `
-            $(if ($lc -match 'error|fail')            { $theme.Danger }
-              elseif ($lc -match 'warn')              { $theme.Warning }
-              elseif ($lc -match 'ok|ready|complete|success|done') { $theme.Success }
-              else                                    { $theme.Info })
     }
 }
 
 $form.Controls.Add($statusStrip)
 
-# ============================================================
-#  LAYOUT – Docked shell panels
-#
-#   [MenuStrip - auto at top by WinForms]
-#   [HeaderBar  48 px  Dock=Top     ]
-#   [ContentRow          Dock=Fill  ]
-#     [Sidebar 170 px  Dock=Left    ]
-#     [SidebarDivider 1px Dock=Left ]
-#     [ContentArea     Dock=Fill    ]
-#   [LogFooter 155 px  Dock=Bottom  ]
-#   [StatusStrip - auto at bottom   ]
-# ============================================================
-
-# ---- HEADER BAR ----
-$pnlHeader = New-Object System.Windows.Forms.Panel
-$pnlHeader.Dock      = [System.Windows.Forms.DockStyle]::Top
-$pnlHeader.Height    = 52
-$pnlHeader.BackColor = $theme.HeaderBar
-$pnlHeader.Padding   = New-Object System.Windows.Forms.Padding(0)
-$form.Controls.Add($pnlHeader)
-
-# Accent left-edge stripe on header
-$pnlHeaderAccent = New-Object System.Windows.Forms.Panel
-$pnlHeaderAccent.Dock      = [System.Windows.Forms.DockStyle]::Left
-$pnlHeaderAccent.Width     = 4
-$pnlHeaderAccent.BackColor = $theme.SidebarAccent
-$pnlHeader.Controls.Add($pnlHeaderAccent)
-
-$lblAppTitle = New-Object System.Windows.Forms.Label
-$lblAppTitle.Text      = "HYPER-V TOOLKIT"
-$lblAppTitle.Font      = $script:FontAppTitle
-$lblAppTitle.ForeColor = [System.Drawing.Color]::White
-$lblAppTitle.AutoSize  = $true
-$lblAppTitle.Location  = New-Object System.Drawing.Point(18, 9)
-$pnlHeader.Controls.Add($lblAppTitle)
-
-$lblAppMeta = New-Object System.Windows.Forms.Label
-$lblAppMeta.Text      = "Version 1  |  Diobyte  |  Made with love"
-$lblAppMeta.Font      = $script:FontSmall
-$lblAppMeta.ForeColor = [System.Drawing.Color]::FromArgb(160, 185, 215)
-$lblAppMeta.AutoSize  = $true
-$lblAppMeta.Location  = New-Object System.Drawing.Point(22, 35)
-$pnlHeader.Controls.Add($lblAppMeta)
-
-$lblHeaderStatus = New-Object System.Windows.Forms.Label
-$lblHeaderStatus.Text      = "  Ready"
-$lblHeaderStatus.Font      = $script:FontBoldLabel
-$lblHeaderStatus.ForeColor = $theme.Success
-$lblHeaderStatus.AutoSize  = $true
-$lblHeaderStatus.Location  = New-Object System.Drawing.Point(420, 19)
-$pnlHeader.Controls.Add($lblHeaderStatus)
-$script:HeaderStatusLabel = $lblHeaderStatus
-
-# ---- LOG FOOTER (before content row so Dock=Bottom takes effect first) ----
-$pnlLogFooter = New-Object System.Windows.Forms.Panel
-$pnlLogFooter.Dock      = [System.Windows.Forms.DockStyle]::Bottom
-$pnlLogFooter.Height    = 155
-$pnlLogFooter.BackColor = $theme.Card
-$pnlLogFooter.Padding   = New-Object System.Windows.Forms.Padding(0)
-$form.Controls.Add($pnlLogFooter)
-
-# Top border on log footer
-$pnlLogTopBorder = New-Object System.Windows.Forms.Panel
-$pnlLogTopBorder.Dock      = [System.Windows.Forms.DockStyle]::Top
-$pnlLogTopBorder.Height    = 1
-$pnlLogTopBorder.BackColor = $theme.Border
-$pnlLogFooter.Controls.Add($pnlLogTopBorder)
-
-# Button column on the right of the log footer
-$pnlLogButtons = New-Object System.Windows.Forms.Panel
-$pnlLogButtons.Dock      = [System.Windows.Forms.DockStyle]::Right
-$pnlLogButtons.Width     = 100
-$pnlLogButtons.BackColor = $theme.Card
-$pnlLogFooter.Controls.Add($pnlLogButtons)
-
-$script:LogBox           = New-Object System.Windows.Forms.RichTextBox
-$script:LogBox.Dock      = [System.Windows.Forms.DockStyle]::Fill
-$script:LogBox.ReadOnly  = $true
-$script:LogBox.BackColor = $theme.Input
-$script:LogBox.ForeColor = $theme.Text
-$script:LogBox.Font      = $script:FontConsolas
-$script:LogBox.WordWrap  = $false
-$script:LogBox.ScrollBars = 'Both'
-$script:LogBox.BorderStyle = 'None'
-$pnlLogFooter.Controls.Add($script:LogBox)
-
-function New-LogButton {
-    param([string]$Text, [int]$Top, [System.Drawing.Color]$Bg, [System.Drawing.Color]$Hover)
-    $btn = New-Object System.Windows.Forms.Button
-    $btn.Text      = $Text
-    $btn.Size      = New-Object System.Drawing.Size(84, 30)
-    $btn.Location  = New-Object System.Drawing.Point(8, $Top)
-    $btn.FlatStyle = 'Flat'
-    $btn.BackColor = $Bg
-    $btn.ForeColor = [System.Drawing.Color]::White
-    $btn.Font      = $script:FontSmall
-    $btn.Cursor    = [System.Windows.Forms.Cursors]::Hand
-    $btn.FlatAppearance.BorderColor       = $theme.Border
-    $btn.FlatAppearance.MouseOverBackColor = $Hover
-    $btn.FlatAppearance.MouseDownBackColor = $Hover
-    $pnlLogButtons.Controls.Add($btn)
-    return $btn
+# Theme palette - Modern dark theme with improved accessibility - Modern dark theme with improved accessibility
+try {
+    $theme = @{
+        Bg              = [System.Drawing.Color]::FromArgb(18, 20, 25)      # Darker background
+        Card            = [System.Drawing.Color]::FromArgb(30, 34, 43)      # Card background
+        Surface         = [System.Drawing.Color]::FromArgb(37, 41, 51)      # Surface for group boxes
+        Input           = [System.Drawing.Color]::FromArgb(45, 49, 59)      # Input field background
+        InputFocus      = [System.Drawing.Color]::FromArgb(55, 59, 69)      # Focused input
+        Border          = [System.Drawing.Color]::FromArgb(65, 71, 85)      # Borders
+        BorderFocus     = [System.Drawing.Color]::FromArgb(100, 106, 120)   # Focused borders
+        Text            = [System.Drawing.Color]::FromArgb(245, 248, 255)   # Primary text
+        TextSecondary   = [System.Drawing.Color]::FromArgb(180, 190, 210)   # Secondary text
+        TextMuted       = [System.Drawing.Color]::FromArgb(140, 150, 170)   # Muted text
+        Muted           = [System.Drawing.Color]::FromArgb(140, 150, 170)   # Backward-compatible alias
+        Accent          = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Primary accent
+        AccentHover     = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Accent hover
+        AccentPressed   = [System.Drawing.Color]::FromArgb(25, 75, 200)     # Accent pressed
+        Success         = [System.Drawing.Color]::FromArgb(34, 197, 94)     # Success green
+        SuccessHover    = [System.Drawing.Color]::FromArgb(22, 163, 74)     # Success hover
+        Warning         = [System.Drawing.Color]::FromArgb(251, 191, 36)    # Warning yellow
+        WarningHover    = [System.Drawing.Color]::FromArgb(217, 119, 6)     # Warning hover
+        Danger          = [System.Drawing.Color]::FromArgb(239, 68, 68)     # Danger red
+        DangerHover     = [System.Drawing.Color]::FromArgb(185, 28, 28)     # Danger hover
+        Info            = [System.Drawing.Color]::FromArgb(59, 130, 246)    # Info blue
+        InfoHover       = [System.Drawing.Color]::FromArgb(37, 99, 235)     # Info hover
+    }
+    Write-StartupTrace -Message "Theme created successfully"
+} catch {
+    Write-StartupTrace -Message "Theme creation failed: $($_.Exception.Message)" -Level 'ERROR'
+    # Fallback to system colors
+    $theme = @{
+        Bg              = [System.Drawing.SystemColors]::ControlDarkDark
+        Card            = [System.Drawing.SystemColors]::Control
+        Surface         = [System.Drawing.SystemColors]::Control
+        Input           = [System.Drawing.SystemColors]::Window
+        InputFocus      = [System.Drawing.SystemColors]::Window
+        Border          = [System.Drawing.SystemColors]::ControlDark
+        BorderFocus     = [System.Drawing.SystemColors]::ControlDark
+        Text            = [System.Drawing.SystemColors]::ControlText
+        TextSecondary   = [System.Drawing.SystemColors]::ControlText
+        TextMuted       = [System.Drawing.SystemColors]::GrayText
+        Muted           = [System.Drawing.SystemColors]::GrayText
+        Accent          = [System.Drawing.SystemColors]::Highlight
+        AccentHover     = [System.Drawing.SystemColors]::Highlight
+        AccentPressed   = [System.Drawing.SystemColors]::Highlight
+        Success         = [System.Drawing.Color]::Green
+        SuccessHover    = [System.Drawing.Color]::Green
+        Warning         = [System.Drawing.Color]::Orange
+        WarningHover    = [System.Drawing.Color]::Orange
+        Danger          = [System.Drawing.Color]::Red
+        DangerHover     = [System.Drawing.Color]::Red
+        Info            = [System.Drawing.Color]::Blue
+        InfoHover       = [System.Drawing.Color]::Blue
+    }
 }
 
-$btnClearLog = New-LogButton "Clear Log" 10  $theme.Surface  $theme.SidebarHov
-$btnSaveLog  = New-LogButton "Save Log"  46  $theme.Surface  $theme.SidebarHov
-$btnExit     = New-LogButton "Exit"      82  $theme.Danger   $theme.DangerHover
-
-$btnSaveLog.Add_Click({
-    $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
+# ---- Tab Control ----
+$tabControl            = New-Object System.Windows.Forms.TabControl
+$tabControl.Location   = New-Object System.Drawing.Point(10, 8)
+$tabControl.Size       = New-Object System.Drawing.Size(1100, 600)
+$tabControl.Font       = $script:FontTabHeader
+$tabControl.DrawMode   = [System.Windows.Forms.TabDrawMode]::OwnerDrawFixed
+$tabControl.ItemSize   = New-Object System.Drawing.Size(150, 32)
+$tabControl.SizeMode   = [System.Windows.Forms.TabSizeMode]::Fixed
+$tabControl.Padding    = New-Object System.Drawing.Point(14, 4)
+# $tabControl.BackColor  = $theme.Card
+$tabControl.Margin     = New-Object System.Windows.Forms.Padding(8)
+try {
+    $script:TabBrushSelected = New-Object System.Drawing.SolidBrush($theme.Accent)
+    $script:TabBrushNormal   = New-Object System.Drawing.SolidBrush($theme.Surface)
+    $script:TabBrushHover    = New-Object System.Drawing.SolidBrush($theme.Input)
+    Write-StartupTrace -Message "Tab brushes created successfully"
+} catch {
+    Write-StartupTrace -Message "Tab brush creation failed: $($_.Exception.Message)" -Level 'ERROR'
+    # Fallback brushes
+    $script:TabBrushSelected = New-Object System.Drawing.SolidBrush([System.Drawing.SystemColors]::Highlight)
+    $script:TabBrushNormal   = New-Object System.Drawing.SolidBrush([System.Drawing.SystemColors]::Control)
+    $script:TabBrushHover    = New-Object System.Drawing.SolidBrush([System.Drawing.SystemColors]::ControlLight)
+}
+$tabControl.Add_DrawItem({
+    param($tabCtrl, $e)
     try {
-        $saveDlg.Filter   = "Log files (*.log)|*.log|Text files (*.txt)|*.txt|All files (*.*)|*.*"
-        $saveDlg.FileName = "HyperV-Toolkit_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-        if ($saveDlg.ShowDialog() -eq 'OK') {
-            try {
-                $script:LogBox.Text | Out-File -FilePath $saveDlg.FileName -Encoding UTF8 -Force
-                Write-Log "Log saved to: $($saveDlg.FileName)" "OK"
-            } catch {
-                Write-Log "Failed to save log: $($_.Exception.Message)" "ERROR"
-            }
-        }
-    } finally { $saveDlg.Dispose() }
+        if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabCtrl.TabPages.Count) { return }
+
+        $isSelected = ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -eq [System.Windows.Forms.DrawItemState]::Selected
+        $isHot = ($e.State -band [System.Windows.Forms.DrawItemState]::HotLight) -eq [System.Windows.Forms.DrawItemState]::HotLight
+        $tabPage = $tabCtrl.TabPages[$e.Index]
+        $rect = $e.Bounds
+
+        $brush = if ($isSelected) { $script:TabBrushSelected } elseif ($isHot) { $script:TabBrushHover } else { $script:TabBrushNormal }
+        $fg = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
+
+        $e.Graphics.FillRectangle($brush, $rect)
+
+        # Draw border
+        $borderPen = New-Object System.Drawing.Pen($theme.Border, 1)
+        $e.Graphics.DrawRectangle($borderPen, $rect.X, $rect.Y, $rect.Width - 1, $rect.Height - 1)
+        $borderPen.Dispose()
+
+        $tabText = if ([string]::IsNullOrWhiteSpace($tabPage.Text)) { " " } else { $tabPage.Text.Trim() }
+        [System.Windows.Forms.TextRenderer]::DrawText(
+            $e.Graphics,
+            $tabText,
+            $tabCtrl.Font,
+            $rect,
+            $fg,
+            [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
+        )
+    } catch {
+        Write-StartupTrace -Message "Tab drawing error: $($_.Exception.Message)" -Level 'ERROR'
+    }
 })
-$btnClearLog.Add_Click({ $script:LogBox.Clear() })
-$btnExit.Add_Click({ $form.Close() })
-
-# ---- CONTENT ROW (fills between header and footer) ----
-$pnlContentRow = New-Object System.Windows.Forms.Panel
-$pnlContentRow.Dock      = [System.Windows.Forms.DockStyle]::Fill
-$pnlContentRow.BackColor = $theme.Bg
-$pnlContentRow.Padding   = New-Object System.Windows.Forms.Padding(0)
-$form.Controls.Add($pnlContentRow)
-
-# ---- SIDEBAR ----
-$pnlSidebar = New-Object System.Windows.Forms.Panel
-$pnlSidebar.Dock      = [System.Windows.Forms.DockStyle]::Left
-$pnlSidebar.Width     = 172
-$pnlSidebar.BackColor = $theme.Sidebar
-$pnlContentRow.Controls.Add($pnlSidebar)
-
-# Sidebar right-edge divider
-$pnlSidebarDiv = New-Object System.Windows.Forms.Panel
-$pnlSidebarDiv.Dock      = [System.Windows.Forms.DockStyle]::Left
-$pnlSidebarDiv.Width     = 1
-$pnlSidebarDiv.BackColor = $theme.Border
-$pnlContentRow.Controls.Add($pnlSidebarDiv)
-
-# ---- CONTENT AREA ----
-$pnlContent = New-Object System.Windows.Forms.Panel
-$pnlContent.Dock      = [System.Windows.Forms.DockStyle]::Fill
-$pnlContent.BackColor = $theme.Bg
-$pnlContent.Padding   = New-Object System.Windows.Forms.Padding(0)
-$pnlContentRow.Controls.Add($pnlContent)
-
-# ---- SIDEBAR: Branding block ----
-$pnlBrand = New-Object System.Windows.Forms.Panel
-$pnlBrand.Dock      = [System.Windows.Forms.DockStyle]::Top
-$pnlBrand.Height    = 64
-$pnlBrand.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 26)
-$pnlSidebar.Controls.Add($pnlBrand)
-
-$lblSidebarHV = New-Object System.Windows.Forms.Label
-$lblSidebarHV.Text      = "HV"
-$lblSidebarHV.Font      = New-Object System.Drawing.Font("Segoe UI", 22, [System.Drawing.FontStyle]::Bold)
-$lblSidebarHV.ForeColor = $theme.SidebarAccent
-$lblSidebarHV.AutoSize  = $false
-$lblSidebarHV.Size      = New-Object System.Drawing.Size(172, 64)
-$lblSidebarHV.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-$pnlBrand.Controls.Add($lblSidebarHV)
-
-# ---- SIDEBAR: Nav helper ----
-$script:NavButtons  = @()
-$script:NavPanelIdx = 0
-
-function New-NavButton {
-    param([string]$Icon, [string]$Label, [int]$TopOffset)
-    $btn = New-Object System.Windows.Forms.Button
-    $btn.Text      = "$Icon   $Label"
-    $btn.Size      = New-Object System.Drawing.Size(172, 52)
-    $btn.Location  = New-Object System.Drawing.Point(0, $TopOffset)
-    $btn.FlatStyle = 'Flat'
-    $btn.BackColor = $theme.Sidebar
-    $btn.ForeColor = $theme.TextMuted
-    $btn.Font      = $script:FontSidebarNav
-    $btn.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-    $btn.Padding   = New-Object System.Windows.Forms.Padding(18, 0, 0, 0)
-    $btn.Cursor    = [System.Windows.Forms.Cursors]::Hand
-    $btn.FlatAppearance.BorderSize             = 0
-    $btn.FlatAppearance.MouseOverBackColor     = $theme.SidebarHov
-    $btn.FlatAppearance.MouseDownBackColor     = $theme.SidebarActive
-    $pnlSidebar.Controls.Add($btn)
-    return $btn
-}
-
-$btnNavCreate = New-NavButton "+    Create VM"  ""  64
-$btnNavGPU    = New-NavButton "#    GPU Setup"  ""  120
-$btnNavEnv    = New-NavButton "=    Environment" "" 176
-
-$script:NavButtons = @($btnNavCreate, $btnNavGPU, $btnNavEnv)
-
-# Sidebar separator and host status indicator
-$pnlSidebarSepLine = New-Object System.Windows.Forms.Label
-$pnlSidebarSepLine.BorderStyle = 'Fixed3D'
-$pnlSidebarSepLine.Size        = New-Object System.Drawing.Size(140, 2)
-$pnlSidebarSepLine.Location    = New-Object System.Drawing.Point(16, 240)
-$pnlSidebar.Controls.Add($pnlSidebarSepLine)
-
-$lblSidebarHVState = New-Object System.Windows.Forms.Label
-$lblSidebarHVState.Text      = "Hyper-V  Active"
-$lblSidebarHVState.Font      = $script:FontSmall
-$lblSidebarHVState.ForeColor = $theme.Success
-$lblSidebarHVState.AutoSize  = $false
-$lblSidebarHVState.Size      = New-Object System.Drawing.Size(172, 20)
-$lblSidebarHVState.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-$lblSidebarHVState.Location  = New-Object System.Drawing.Point(0, 250)
-$pnlSidebar.Controls.Add($lblSidebarHVState)
-
-$lblSidebarOs = New-Object System.Windows.Forms.Label
-$lblSidebarOs.Text      = if ($script:HostIsWin11) { "Windows 11 Host" } else { "Windows 10 Host" }
-$lblSidebarOs.Font      = $script:FontSmall
-$lblSidebarOs.ForeColor = $theme.TextMuted
-$lblSidebarOs.AutoSize  = $false
-$lblSidebarOs.Size      = New-Object System.Drawing.Size(172, 18)
-$lblSidebarOs.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-$lblSidebarOs.Location  = New-Object System.Drawing.Point(0, 272)
-$pnlSidebar.Controls.Add($lblSidebarOs)
+$form.Controls.Add($tabControl)
 
 # ============================================================
-#  CONTENT PANELS  (one per section, only one visible at a time)
+#  TAB 1: CREATE VM
 # ============================================================
+$tabCreate             = New-Object System.Windows.Forms.TabPage
+$tabCreate.Text        = "  Create VM  "
+# $tabCreate.BackColor   = $theme.Card
+# $tabCreate.ForeColor   = $theme.Text
+$tabCreate.AutoScroll  = $true
+$tabCreate.Padding     = New-Object System.Windows.Forms.Padding(8)
 
-# ── Helper used across all panels ──────────────────────────
+# GroupBoxes are added directly to $tabCreate; Update-TabLayouts handles all positioning.
+
+$tabControl.TabPages.Add($tabCreate)
+
+$lblCreateHeader = New-Object System.Windows.Forms.Label
+$lblCreateHeader.Text = "Build, configure, and launch Hyper-V VMs with secure defaults and automation"
+$lblCreateHeader.AutoSize = $true
+$lblCreateHeader.Location = New-Object System.Drawing.Point(10, 2)
+$lblCreateHeader.ForeColor = $theme.Muted
+$lblCreateHeader.Font = $script:FontHeader
+$tabCreate.Controls.Add($lblCreateHeader)
+
+# Vars to hold controls
+$ctrlCreate = @{}
+
+# --- Helper: Add Label+Control Row ---
 function New-LabeledControl {
     param(
         [System.Windows.Forms.Control]$Parent,
         [int]$X, [int]$Y,
         [string]$LabelText,
-        [int]$LabelWidth = 120,
+        [int]$LabelWidth = 110,
         [string]$ControlType = "TextBox",
-        [int]$ControlWidth = 260,
+        [int]$ControlWidth = 280,
         [hashtable]$ControlProps = @{}
     )
     $lbl = New-Object System.Windows.Forms.Label
     $lbl.Text      = $LabelText
     $lbl.AutoSize  = $true
-    $lbl.ForeColor = $theme.Text
     $lbl.Location  = New-Object System.Drawing.Point($X, ($Y + 3))
-    $lbl.AutoSize  = $false
-    $lbl.Size      = New-Object System.Drawing.Size(($LabelWidth - 4), 22)
+    $lbl.ForeColor = [System.Drawing.Color]::White
+
+    $effectiveLabelWidth = [Math]::Max($LabelWidth, ($lbl.PreferredWidth + 8))
+    $lbl.AutoSize = $false
+    $lbl.Size = New-Object System.Drawing.Size(($effectiveLabelWidth - 4), [Math]::Max(20, ($lbl.PreferredHeight + 2)))
     $lbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
     $Parent.Controls.Add($lbl)
 
@@ -2998,396 +2823,317 @@ function New-LabeledControl {
         "NumericUpDown" { New-Object System.Windows.Forms.NumericUpDown }
         "CheckBox"      { New-Object System.Windows.Forms.CheckBox }
         "Label"         { $l = New-Object System.Windows.Forms.Label; $l.ForeColor = $theme.Info; $l }
-        default         { New-Object System.Windows.Forms.TextBox }
+        default         { Write-Log "New-LabeledControl: unknown ControlType '$ControlType'" "WARN"; New-Object System.Windows.Forms.TextBox }
     }
-    $ctrl.Location = New-Object System.Drawing.Point(($X + $LabelWidth), $Y)
-    if ($ControlType -ne "CheckBox" -and $ControlType -ne "Label") {
-        $ctrl.Width  = $ControlWidth
-        $ctrl.BackColor = $theme.Input
-        $ctrl.ForeColor = $theme.Text
+    $ctrl.Location = New-Object System.Drawing.Point(($X + $effectiveLabelWidth), $Y)
+    if ($ControlType -ne "CheckBox") { $ctrl.Width = $ControlWidth }
+
+    if ($ControlType -ne "CheckBox" -and $Parent -and $Parent.ClientSize.Width -gt 0) {
+        $maxWidth = [Math]::Max(80, ($Parent.ClientSize.Width - $ctrl.Left - 12))
+        if ($ctrl.Width -gt $maxWidth) {
+            $ctrl.Width = $maxWidth
+        }
     }
-    if ($ControlType -eq "TextBox")  { $ctrl.BorderStyle = 'FixedSingle' }
-    if ($ControlType -eq "ComboBox") { $ctrl.FlatStyle   = 'Flat' }
     foreach ($k in $ControlProps.Keys) { $ctrl.$k = $ControlProps[$k] }
     $Parent.Controls.Add($ctrl)
     return $ctrl
 }
 
-# ── GroupBox factory ────────────────────────────────────────
-function New-ThemedGroupBox {
-    param([string]$Title, [System.Windows.Forms.Control]$Parent)
-    $gb = New-Object System.Windows.Forms.GroupBox
-    $gb.Text      = $Title
-    $gb.ForeColor = $theme.Text
-    $gb.BackColor = $theme.Surface
-    $gb.Font      = $script:ThemeFontGroupBox
-    $Parent.Controls.Add($gb)
-    return $gb
-}
-
-# ── Horizontal divider ──────────────────────────────────────
-function New-Divider {
-    param([System.Windows.Forms.Control]$Parent, [int]$X, [int]$Y, [int]$Width)
-    $div = New-Object System.Windows.Forms.Label
-    $div.Text        = ""
-    $div.BorderStyle = 'Fixed3D'
-    $div.Size        = New-Object System.Drawing.Size($Width, 2)
-    $div.Location    = New-Object System.Drawing.Point($X, $Y)
-    $Parent.Controls.Add($div)
-}
-
-# ── Themed section-title label ──────────────────────────────
-function New-SectionLabel {
-    param([string]$Text, [System.Windows.Forms.Control]$Parent, [int]$X, [int]$Y)
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text      = $Text
-    $lbl.Font      = $script:FontBoldLabel
-    $lbl.ForeColor = $theme.Muted
-    $lbl.AutoSize  = $true
-    $lbl.Location  = New-Object System.Drawing.Point($X, $Y)
-    $Parent.Controls.Add($lbl)
-    return $lbl
-}
-
-# ============================================================
-#  PANEL 1:  CREATE VM
-# ============================================================
-$tabCreate = New-Object System.Windows.Forms.Panel
-$tabCreate.Dock       = [System.Windows.Forms.DockStyle]::Fill
-$tabCreate.BackColor  = $theme.Bg
-$tabCreate.AutoScroll = $true
-$tabCreate.Visible    = $true       # default view
-$pnlContent.Controls.Add($tabCreate)
-
-$ctrlCreate = @{}
-
-# ── Panel header ────────────────────────────────────────────
-$pnlCreateHeader = New-Object System.Windows.Forms.Panel
-$pnlCreateHeader.Dock      = [System.Windows.Forms.DockStyle]::Top
-$pnlCreateHeader.Height    = 44
-$pnlCreateHeader.BackColor = $theme.Card
-
-$lblCreateTitle = New-Object System.Windows.Forms.Label
-$lblCreateTitle.Text      = "Create Virtual Machine"
-$lblCreateTitle.Font      = $script:FontTabHeader
-$lblCreateTitle.ForeColor = $theme.TextHigh
-$lblCreateTitle.AutoSize  = $true
-$lblCreateTitle.Location  = New-Object System.Drawing.Point(14, 8)
-$pnlCreateHeader.Controls.Add($lblCreateTitle)
-
-$lblCreateSub = New-Object System.Windows.Forms.Label
-$lblCreateSub.Text      = "Configure and provision a new Hyper-V virtual machine with automated unattended setup"
-$lblCreateSub.Font      = $script:FontSmall
-$lblCreateSub.ForeColor = $theme.TextMuted
-$lblCreateSub.AutoSize  = $true
-$lblCreateSub.Location  = New-Object System.Drawing.Point(14, 26)
-$pnlCreateHeader.Controls.Add($lblCreateSub)
-
-$tabCreate.Controls.Add($pnlCreateHeader)
-
-# ── Scrollable body ─────────────────────────────────────────
-$pnlCreateBody = New-Object System.Windows.Forms.Panel
-$pnlCreateBody.AutoScroll  = $true
-$pnlCreateBody.BackColor   = $theme.Bg
-$pnlCreateBody.Location    = New-Object System.Drawing.Point(0, 44)
-$tabCreate.Controls.Add($pnlCreateBody)
-
-# ── LEFT COLUMN ─────────────────────────────────────────────
-$grpConfig           = New-ThemedGroupBox "VM Configuration" $pnlCreateBody
-$grpConfig.Location  = New-Object System.Drawing.Point(12, 12)
-$grpConfig.Size      = New-Object System.Drawing.Size(470, 570)
+# --- Left Column: VM Configuration ---
+$grpConfig           = New-Object System.Windows.Forms.GroupBox
+$grpConfig.Text      = "VM Configuration - Core Settings"
+$grpConfig.ForeColor = $theme.Text
+$grpConfig.BackColor = $theme.Surface
 $grpConfig.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$tabCreate.Controls.Add($grpConfig)
 
-$rowY = 26
-
-$ctrlCreate["VMName"] = New-LabeledControl $grpConfig 12 $rowY "VM Name:"            -LabelWidth 130 -ControlWidth 310
+$rowY = 22
+$ctrlCreate["VMName"] = New-LabeledControl $grpConfig 12 $rowY "VM Name:" -ControlWidth 300
 $rowY += 36
 
-$ctrlCreate["VMLocation"] = New-LabeledControl $grpConfig 12 $rowY "VM Location:" -LabelWidth 130 -ControlWidth 240
+$ctrlCreate["VMLocation"] = New-LabeledControl $grpConfig 12 $rowY "VM Location:" -ControlWidth 240
 $btnBrowseVM = New-Object System.Windows.Forms.Button
-$btnBrowseVM.Text      = "Browse"
-$btnBrowseVM.Size      = New-Object System.Drawing.Size(60, 24)
-$btnBrowseVM.Location  = New-Object System.Drawing.Point(390, $rowY)
+$btnBrowseVM.Text     = "Browse"
+$btnBrowseVM.Size     = New-Object System.Drawing.Size(52, 24)
+$btnBrowseVM.Location = New-Object System.Drawing.Point(365, $rowY)
 $btnBrowseVM.FlatStyle = 'Flat'
-$btnBrowseVM.BackColor = $theme.Surface
-$btnBrowseVM.ForeColor = $theme.Text
-$btnBrowseVM.Cursor    = [System.Windows.Forms.Cursors]::Hand
 $grpConfig.Controls.Add($btnBrowseVM)
-try {
-    $ctrlCreate["VMLocation"].Text = (Get-VMHost).VirtualMachinePath
-} catch {
-    $ctrlCreate["VMLocation"].Text = Join-Path $env:PUBLIC "Hyper-V"
-    Write-Log "Using fallback VM location." "WARN"
+# Default VM location
+try { 
+    $ctrlCreate["VMLocation"].Text = (Get-VMHost).VirtualMachinePath 
+} catch { 
+    $fallbackPath = Join-Path $env:PUBLIC "Hyper-V"
+    $ctrlCreate["VMLocation"].Text = $fallbackPath
+    Write-Log "Using fallback VM location: $fallbackPath" "WARN"
 }
 $rowY += 36
 
-$ctrlCreate["ISOPath"] = New-LabeledControl $grpConfig 12 $rowY "ISO File:" -LabelWidth 130 -ControlWidth 240
+$ctrlCreate["ISOPath"] = New-LabeledControl $grpConfig 12 $rowY "ISO File:" -ControlWidth 240
 $btnBrowseISO = New-Object System.Windows.Forms.Button
-$btnBrowseISO.Text      = "Browse"
-$btnBrowseISO.Size      = New-Object System.Drawing.Size(60, 24)
-$btnBrowseISO.Location  = New-Object System.Drawing.Point(390, $rowY)
+$btnBrowseISO.Text     = "Browse"
+$btnBrowseISO.Size     = New-Object System.Drawing.Size(52, 24)
+$btnBrowseISO.Location = New-Object System.Drawing.Point(365, $rowY)
 $btnBrowseISO.FlatStyle = 'Flat'
-$btnBrowseISO.BackColor = $theme.Surface
-$btnBrowseISO.ForeColor = $theme.Text
-$btnBrowseISO.Cursor    = [System.Windows.Forms.Cursors]::Hand
 $grpConfig.Controls.Add($btnBrowseISO)
 $rowY += 36
 
-$ctrlCreate["Edition"] = New-LabeledControl $grpConfig 12 $rowY "Edition:" -LabelWidth 130 -ControlType ComboBox -ControlWidth 310
+$ctrlCreate["Edition"] = New-LabeledControl $grpConfig 12 $rowY "Win Edition:" -ControlType ComboBox -ControlWidth 300
 $rowY += 34
 
-$ctrlCreate["OSInfo"] = New-LabeledControl $grpConfig 12 $rowY "Detected OS:" -LabelWidth 130 -ControlType Label -ControlWidth 300 `
-    -ControlProps @{ AutoSize = $true; Text = "(select an ISO to detect)" }
-$rowY += 30
+# OS Detection label (auto-filled)
+$ctrlCreate["OSInfo"] = New-LabeledControl $grpConfig 12 $rowY "Detected OS:" -ControlType Label -ControlWidth 300 -ControlProps @{ AutoSize = $true; Text = "(select an ISO to detect)" }
+$rowY += 32
 
-New-Divider $grpConfig 12 $rowY 440
+# Separator
+$sep1 = New-Object System.Windows.Forms.Label
+$sep1.Text      = ""
+$sep1.BorderStyle = 'Fixed3D'
+$sep1.Size      = New-Object System.Drawing.Size(430, 2)
+$sep1.Location  = New-Object System.Drawing.Point(12, $rowY)
+$grpConfig.Controls.Add($sep1)
 $rowY += 14
 
-$ctrlCreate["Username"] = New-LabeledControl $grpConfig 12 $rowY "Local Username:" -LabelWidth 130 -ControlWidth 200
+$ctrlCreate["Username"] = New-LabeledControl $grpConfig 12 $rowY "Local User:" -ControlWidth 200
 $ctrlCreate["Username"].Text = "User"
 $rowY += 36
 
-$ctrlCreate["Password"] = New-LabeledControl $grpConfig 12 $rowY "Password:" -LabelWidth 130 -ControlWidth 200
+$ctrlCreate["Password"] = New-LabeledControl $grpConfig 12 $rowY "Password:" -ControlWidth 200
+$ctrlCreate["Password"].Text = ""
 $ctrlCreate["Password"].UseSystemPasswordChar = $true
 $rowY += 36
 
-New-Divider $grpConfig 12 $rowY 440
+# Separator
+$sep2 = New-Object System.Windows.Forms.Label
+$sep2.Text      = ""
+$sep2.BorderStyle = 'Fixed3D'
+$sep2.Size      = New-Object System.Drawing.Size(430, 2)
+$sep2.Location  = New-Object System.Drawing.Point(12, $rowY)
+$grpConfig.Controls.Add($sep2)
 $rowY += 14
 
-$ctrlCreate["vCPU"] = New-LabeledControl $grpConfig 12 $rowY "vCPUs:" -LabelWidth 130 -ControlType NumericUpDown -ControlWidth 80 `
+$ctrlCreate["vCPU"] = New-LabeledControl $grpConfig 12 $rowY "vCPUs:" -ControlType NumericUpDown -ControlWidth 80 `
     -ControlProps @{ Minimum = 1; Maximum = [Environment]::ProcessorCount; Value = [Math]::Min(4, [Environment]::ProcessorCount); DecimalPlaces = 0 }
 $rowY += 34
 
 $totalRamGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-$ctrlCreate["Memory"] = New-LabeledControl $grpConfig 12 $rowY "Memory (GB):" -LabelWidth 130 -ControlType NumericUpDown -ControlWidth 80 `
+$ctrlCreate["Memory"] = New-LabeledControl $grpConfig 12 $rowY "Memory (GB):" -ControlType NumericUpDown -ControlWidth 80 `
     -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(8, $totalRamGB); DecimalPlaces = 0 }
 $rowY += 34
 
-$ctrlCreate["DiskSize"] = New-LabeledControl $grpConfig 12 $rowY "Disk (GB):" -LabelWidth 130 -ControlType NumericUpDown -ControlWidth 80 `
+$ctrlCreate["DiskSize"] = New-LabeledControl $grpConfig 12 $rowY "Disk (GB):" -ControlType NumericUpDown -ControlWidth 80 `
     -ControlProps @{ Minimum = 20; Maximum = 2048; Value = 80; DecimalPlaces = 0 }
 $rowY += 34
 
-$ctrlCreate["Switch"] = New-LabeledControl $grpConfig 12 $rowY "Virtual Switch:" -LabelWidth 130 -ControlType ComboBox -ControlWidth 200
+$ctrlCreate["Switch"] = New-LabeledControl $grpConfig 12 $rowY "Virtual Switch:" -ControlType ComboBox -ControlWidth 200
 try {
     Get-VMSwitch | Select-Object -ExpandProperty Name | ForEach-Object { [void]$ctrlCreate["Switch"].Items.Add($_) }
     if ($ctrlCreate["Switch"].Items.Count -gt 0) { $ctrlCreate["Switch"].SelectedIndex = 0 }
 } catch {
-    Write-Log "Could not enumerate Hyper-V switches: $($_.Exception.Message)" "WARN"
+    Write-Log "Could not enumerate Hyper-V virtual switches in UI: $($_.Exception.Message)" "WARN"
 }
 $rowY += 34
 
-$ctrlCreate["Resolution"] = New-LabeledControl $grpConfig 12 $rowY "Resolution:" -LabelWidth 130 -ControlType ComboBox -ControlWidth 150
-@("800x600","1024x768","1280x720","1280x800","1280x1024","1366x768","1440x900","1600x900","1680x1050","1920x1080") |
-    ForEach-Object { [void]$ctrlCreate["Resolution"].Items.Add($_) }
+$ctrlCreate["Resolution"] = New-LabeledControl $grpConfig 12 $rowY "Resolution:" -ControlType ComboBox -ControlWidth 150
+@("800x600","1024x768","1280x720","1280x800","1280x1024","1366x768","1440x900",
+  "1600x900","1680x1050","1920x1080") | ForEach-Object { [void]$ctrlCreate["Resolution"].Items.Add($_) }
 $ctrlCreate["Resolution"].SelectedItem = "1920x1080"
 $rowY += 34
 
-$ctrlCreate["CheckpointMode"] = New-LabeledControl $grpConfig 12 $rowY "Checkpoints:" -LabelWidth 130 -ControlType ComboBox -ControlWidth 150
+$ctrlCreate["CheckpointMode"] = New-LabeledControl $grpConfig 12 $rowY "Checkpoint Mode:" -LabelWidth 135 -ControlType ComboBox -ControlWidth 150
 @("Disabled","Production","ProductionOnly","Standard") | ForEach-Object { [void]$ctrlCreate["CheckpointMode"].Items.Add($_) }
 $ctrlCreate["CheckpointMode"].SelectedItem = "Disabled"
 $rowY += 34
 
-$ctrlCreate["DynamicMemMin"] = New-LabeledControl $grpConfig 12 $rowY "Dyn. Min (GB):"  -LabelWidth 130 -ControlType NumericUpDown -ControlWidth 80 `
-    -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = 1; DecimalPlaces = 0 }
-$rowY += 34
+$ctrlCreate["DynamicMemMin"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Min (GB):" -LabelWidth 140 -ControlType NumericUpDown -ControlWidth 80 `
+        -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = 1; DecimalPlaces = 0 }
+$rowY += 38
 
-$ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dyn. Max (GB):"  -LabelWidth 130 -ControlType NumericUpDown -ControlWidth 80 `
-    -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(16, $totalRamGB); DecimalPlaces = 0 }
+$ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic Max (GB):" -LabelWidth 140 -ControlType NumericUpDown -ControlWidth 80 `
+        -ControlProps @{ Minimum = 1; Maximum = $totalRamGB; Value = [Math]::Min(16, $totalRamGB); DecimalPlaces = 0 }
 
-# Resize grpConfig to fit content
-$configBottom = ($grpConfig.Controls | ForEach-Object { $_.Bottom } | Measure-Object -Maximum).Maximum
-$grpConfig.Height = [Math]::Max(560, $configBottom + 14)
+# --- Right Column: Options ---
 
-# ── RIGHT COLUMN ────────────────────────────────────────────
-$grpBoot = New-ThemedGroupBox "Boot && Hardware" $pnlCreateBody
-$grpBoot.Location = New-Object System.Drawing.Point(496, 12)
-$grpBoot.Size     = New-Object System.Drawing.Size(480, 120)
-$grpBoot.Anchor   = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+# GroupBox: Boot & Hardware
+$grpBoot           = New-Object System.Windows.Forms.GroupBox
+$grpBoot.Text      = "Boot && Hardware - Security"
+$grpBoot.ForeColor = [System.Drawing.Color]::White
+$grpBoot.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$tabCreate.Controls.Add($grpBoot)
 
-$chkBootY = 26
-foreach ($chkDef in @(
-    @{ Key = "SecureBoot"; Text = "Secure Boot  (auto: ON for Win11, OFF for Win10)"; Default = $true  },
-    @{ Key = "TPM";        Text = "Virtual TPM  (required for Windows 11)";            Default = $true  },
-    @{ Key = "VHDType";    Text = "Fixed-size VHD  (default: dynamic / expanding)";   Default = $false }
-)) {
-    $cb = New-Object System.Windows.Forms.CheckBox
-    $cb.Text      = $chkDef.Text
-    $cb.AutoSize  = $true
-    $cb.Checked   = $chkDef.Default
-    $cb.Location  = New-Object System.Drawing.Point(14, $chkBootY)
-    $cb.ForeColor = $theme.Text
-    $cb.FlatStyle = 'Flat'
-    $grpBoot.Controls.Add($cb)
-    $ctrlCreate[$chkDef.Key] = $cb
-    $chkBootY += 30
-}
+$ctrlCreate["SecureBoot"] = New-Object System.Windows.Forms.CheckBox
+$ctrlCreate["SecureBoot"].Text     = "Secure Boot (auto: ON for Win11, OFF for Win10)"
+$ctrlCreate["SecureBoot"].AutoSize = $true
+$ctrlCreate["SecureBoot"].Checked  = $true
+$ctrlCreate["SecureBoot"].Location = New-Object System.Drawing.Point(14, 28)
+$ctrlCreate["SecureBoot"].ForeColor = [System.Drawing.Color]::White
+$grpBoot.Controls.Add($ctrlCreate["SecureBoot"])
 
-$grpOpts = New-ThemedGroupBox "VM Options" $pnlCreateBody
-$grpOpts.Location = New-Object System.Drawing.Point(496, 144)
-$grpOpts.Size     = New-Object System.Drawing.Size(480, 200)
-$grpOpts.Anchor   = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$ctrlCreate["TPM"] = New-Object System.Windows.Forms.CheckBox
+$ctrlCreate["TPM"].Text     = "Virtual TPM (required for Win11)"
+$ctrlCreate["TPM"].AutoSize = $true
+$ctrlCreate["TPM"].Checked  = $true
+$ctrlCreate["TPM"].Location = New-Object System.Drawing.Point(14, 58)
+$ctrlCreate["TPM"].ForeColor = [System.Drawing.Color]::White
+$grpBoot.Controls.Add($ctrlCreate["TPM"])
 
-$optsLeft  = @(
-    @{ Key = "DynamicMem";      Text = "Dynamic Memory";             X = 14;  Y = 26 },
-    @{ Key = "EnhancedSession"; Text = "Enhanced Session Mode";      X = 14;  Y = 56 },
-    @{ Key = "StartVM";         Text = "Start VM after creation";    X = 14;  Y = 86 },
-    @{ Key = "StrictLegacyMode";Text = "Strict Legacy Mode (Win10)"; X = 14;  Y = 116}
+$ctrlCreate["VHDType"] = New-Object System.Windows.Forms.CheckBox
+$ctrlCreate["VHDType"].Text     = "Fixed-size VHD (default: Dynamic / expanding)"
+$ctrlCreate["VHDType"].AutoSize = $true
+$ctrlCreate["VHDType"].Checked  = $false
+$ctrlCreate["VHDType"].Location = New-Object System.Drawing.Point(14, 88)
+$ctrlCreate["VHDType"].ForeColor = [System.Drawing.Color]::White
+$grpBoot.Controls.Add($ctrlCreate["VHDType"])
+
+# GroupBox: VM Options
+$grpOpts           = New-Object System.Windows.Forms.GroupBox
+$grpOpts.Text      = "VM Options - Runtime"
+$grpOpts.ForeColor = [System.Drawing.Color]::White
+$grpOpts.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$tabCreate.Controls.Add($grpOpts)
+
+$chkNames = @(
+    @{ Key = "DynamicMem";       Text = "Enable Dynamic Memory";       X = 14;  Y = 28; Default = $false },
+    @{ Key = "EnhancedSession";  Text = "Enable Enhanced Session Mode"; X = 14;  Y = 58; Default = $false },
+    @{ Key = "StartVM";          Text = "Start VM after creation";     X = 14;  Y = 88; Default = $true },
+    @{ Key = "StrictLegacyMode"; Text = "Strict Legacy Mode (Win10 fallback)"; X = 14;  Y = 118; Default = $false },
+    @{ Key = "AutoCreateSwitch"; Text = "Auto-create NAT switch";      X = 274; Y = 28; Default = $true },
+    @{ Key = "EnableMetering";   Text = "Enable Resource Metering";    X = 274; Y = 58; Default = $true },
+    @{ Key = "EnableAutoLogon";  Text = "Enable Auto Logon";           X = 274; Y = 88; Default = $true }
 )
-$optsRight = @(
-    @{ Key = "AutoCreateSwitch";Text = "Auto-create NAT switch";     X = 248; Y = 26 },
-    @{ Key = "EnableMetering";  Text = "Enable Resource Metering";   X = 248; Y = 56 },
-    @{ Key = "EnableAutoLogon"; Text = "Enable Auto Logon";          X = 248; Y = 86 }
-)
-foreach ($chkDef in ($optsLeft + $optsRight)) {
+foreach ($chk in $chkNames) {
     $cb = New-Object System.Windows.Forms.CheckBox
-    $cb.Text      = $chkDef.Text
-    $cb.AutoSize  = $true
-    $cb.Checked   = ($chkDef.Key -in @("StartVM","AutoCreateSwitch","EnableMetering","EnableAutoLogon"))
-    $cb.Location  = New-Object System.Drawing.Point($chkDef.X, $chkDef.Y)
-    $cb.ForeColor = $theme.Text
-    $cb.FlatStyle = 'Flat'
+    $cb.Text     = $chk.Text
+    $cb.AutoSize = $true
+    $cb.Checked  = $chk.Default
+    $cb.Location = New-Object System.Drawing.Point($chk.X, $chk.Y)
+    $cb.ForeColor = [System.Drawing.Color]::White
     $grpOpts.Controls.Add($cb)
-    $ctrlCreate[$chkDef.Key] = $cb
+    $ctrlCreate[$chk.Key] = $cb
 }
 
 $ctrlCreate["RoutingHint"] = New-Object System.Windows.Forms.Label
-$ctrlCreate["RoutingHint"].Text      = "Network: Auto-create NAT provides fallback networking when no switch is selected."
-$ctrlCreate["RoutingHint"].Size      = New-Object System.Drawing.Size(450, 40)
-$ctrlCreate["RoutingHint"].Location  = New-Object System.Drawing.Point(14, 148)
+$ctrlCreate["RoutingHint"].Text = "Routing: Auto-create NAT switch provides fallback networking when no switch is selected."
+$ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size(470, 42)
+$ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 124)
 $ctrlCreate["RoutingHint"].ForeColor = $theme.Muted
 $ctrlCreate["RoutingHint"].AutoEllipsis = $true
 $grpOpts.Controls.Add($ctrlCreate["RoutingHint"])
 
-# ── Create VM action strip ───────────────────────────────────
-$pnlCreateAction = New-Object System.Windows.Forms.Panel
-$pnlCreateAction.BackColor = $theme.Card
-$pnlCreateAction.Location  = New-Object System.Drawing.Point(0, 0)  # positioned by layout
-$pnlCreateAction.Height    = 80
-$pnlCreateBody.Controls.Add($pnlCreateAction)
-
-$ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
-$ctrlCreate["ValidationHint"].Text      = "Checks:  Name pending  |  Source pending  |  Network pending  |  User pending  |  Password pending"
-$ctrlCreate["ValidationHint"].Size      = New-Object System.Drawing.Size(700, 20)
-$ctrlCreate["ValidationHint"].Location  = New-Object System.Drawing.Point(14, 10)
-$ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
-$ctrlCreate["ValidationHint"].AutoEllipsis = $true
-$pnlCreateAction.Controls.Add($ctrlCreate["ValidationHint"])
+# Bottom controls - added directly to $tabCreate; Update-TabLayouts positions them.
 
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
-$ctrlCreate["ModeHint"].Text      = "Mode: ISO Deploy — uses ISO, selected edition, and unattended setup."
-$ctrlCreate["ModeHint"].Size      = New-Object System.Drawing.Size(700, 18)
-$ctrlCreate["ModeHint"].Location  = New-Object System.Drawing.Point(14, 32)
-$ctrlCreate["ModeHint"].ForeColor = $theme.Muted
-$pnlCreateAction.Controls.Add($ctrlCreate["ModeHint"])
+$ctrlCreate["ModeHint"].Text = "Mode: ISO Deploy - Uses ISO, selected edition, and unattended setup."
+$ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 18)
+$ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 20)
+$ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
+$ctrlCreate["ModeHint"].AutoEllipsis = $true
+$ctrlCreate["ModeHint"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlCreate["ModeHint"].AutoSize = $false
+$tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
-$ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
-$ctrlCreate["CreateStatus"].Text      = "Ready to create VM"
-$ctrlCreate["CreateStatus"].Size      = New-Object System.Drawing.Size(440, 22)
-$ctrlCreate["CreateStatus"].Location  = New-Object System.Drawing.Point(14, 52)
-$ctrlCreate["CreateStatus"].ForeColor = $theme.Info
-$ctrlCreate["CreateStatus"].AutoEllipsis = $true
-$pnlCreateAction.Controls.Add($ctrlCreate["CreateStatus"])
+$ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
+$ctrlCreate["ValidationHint"].Text = "Checks: Name pending | Source pending | Network pending | User pending | Password pending"
+$ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 20)
+$ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 0)
+$ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
+$ctrlCreate["ValidationHint"].AutoEllipsis = $true
+$ctrlCreate["ValidationHint"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlCreate["ValidationHint"].AutoSize = $false
+$tabCreate.Controls.Add($ctrlCreate["ValidationHint"])
 
-$ctrlCreate["CreateProgress"] = New-Object System.Windows.Forms.ProgressBar
-$ctrlCreate["CreateProgress"].Minimum = 0
-$ctrlCreate["CreateProgress"].Maximum = 100
-$ctrlCreate["CreateProgress"].Value   = 0
-$ctrlCreate["CreateProgress"].Style   = 'Continuous'
-$ctrlCreate["CreateProgress"].Size    = New-Object System.Drawing.Size(440, 12)
-$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(14, 56)
-$pnlCreateAction.Controls.Add($ctrlCreate["CreateProgress"])
-
-$btnCreateVM = New-Object System.Windows.Forms.Button
+# Create VM Button
+$btnCreateVM           = New-Object System.Windows.Forms.Button
 $btnCreateVM.Text      = "Create VM"
-$btnCreateVM.Size      = New-Object System.Drawing.Size(150, 50)
+$btnCreateVM.Size      = New-Object System.Drawing.Size(140, 36)
+$btnCreateVM.Location  = New-Object System.Drawing.Point(642, 34)
 $btnCreateVM.FlatStyle = 'Flat'
 $btnCreateVM.BackColor = $theme.Accent
 $btnCreateVM.ForeColor = [System.Drawing.Color]::White
 $btnCreateVM.Font      = $script:FontBoldButton
-$btnCreateVM.Cursor    = [System.Windows.Forms.Cursors]::Hand
-$btnCreateVM.FlatAppearance.BorderColor        = $theme.AccentHover
+$btnCreateVM.FlatAppearance.BorderColor = $theme.AccentHover
 $btnCreateVM.FlatAppearance.MouseOverBackColor = $theme.AccentHover
 $btnCreateVM.FlatAppearance.MouseDownBackColor = $theme.AccentPressed
-$pnlCreateAction.Controls.Add($btnCreateVM)
+$tabCreate.Controls.Add($btnCreateVM)
+
+# Create VM status + progress
+$ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
+$ctrlCreate["CreateStatus"].Text = "Ready to create VM"
+$ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 34)
+$ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 38)
+$ctrlCreate["CreateStatus"].ForeColor = $theme.Info
+$ctrlCreate["CreateStatus"].AutoEllipsis = $true
+$ctrlCreate["CreateStatus"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlCreate["CreateStatus"].AutoSize = $false
+$tabCreate.Controls.Add($ctrlCreate["CreateStatus"])
+
+$ctrlCreate["CreateProgress"] = New-Object System.Windows.Forms.ProgressBar
+$ctrlCreate["CreateProgress"].Minimum = 0
+$ctrlCreate["CreateProgress"].Maximum = 100
+$ctrlCreate["CreateProgress"].Value = 0
+$ctrlCreate["CreateProgress"].Style = 'Continuous'
+$ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size(450, 14)
+$ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 60)
+$tabCreate.Controls.Add($ctrlCreate["CreateProgress"])
 
 # ============================================================
-#  PANEL 2:  GPU MANAGER
+#  TAB 2: GPU MANAGER
 # ============================================================
-$tabGPU = New-Object System.Windows.Forms.Panel
-$tabGPU.Dock       = [System.Windows.Forms.DockStyle]::Fill
-$tabGPU.BackColor  = $theme.Bg
-$tabGPU.AutoScroll = $true
-$tabGPU.Visible    = $false
-$pnlContent.Controls.Add($tabGPU)
+$tabGPU             = New-Object System.Windows.Forms.TabPage
+$tabGPU.Text        = "  GPU Manager  "
+# $tabGPU.BackColor   = $theme.Card
+# $tabGPU.ForeColor   = $theme.Text
+$tabGPU.AutoScroll  = $true
+$tabGPU.Padding     = New-Object System.Windows.Forms.Padding(8)
+$tabControl.TabPages.Add($tabGPU)
+
+$lblGpuHeader = New-Object System.Windows.Forms.Label
+$lblGpuHeader.Text = "Select VMs, configure GPU-P allocation, and inject/update driver stacks"
+$lblGpuHeader.AutoSize = $true
+$lblGpuHeader.Location = New-Object System.Drawing.Point(10, 2)
+$lblGpuHeader.ForeColor = $theme.Muted
+$lblGpuHeader.Font = $script:FontHeader
+$tabGPU.Controls.Add($lblGpuHeader)
 
 $ctrlGPU = @{}
 
-# ── Panel header ────────────────────────────────────────────
-$pnlGpuHeader = New-Object System.Windows.Forms.Panel
-$pnlGpuHeader.Dock      = [System.Windows.Forms.DockStyle]::Top
-$pnlGpuHeader.Height    = 44
-$pnlGpuHeader.BackColor = $theme.Card
-
-$lblGpuTitle = New-Object System.Windows.Forms.Label
-$lblGpuTitle.Text      = "GPU Partition Manager"
-$lblGpuTitle.Font      = $script:FontTabHeader
-$lblGpuTitle.ForeColor = $theme.TextHigh
-$lblGpuTitle.AutoSize  = $true
-$lblGpuTitle.Location  = New-Object System.Drawing.Point(14, 8)
-$pnlGpuHeader.Controls.Add($lblGpuTitle)
-
-$lblGpuSub = New-Object System.Windows.Forms.Label
-$lblGpuSub.Text      = "Select VMs, configure GPU-P allocation, and inject / update driver stacks"
-$lblGpuSub.Font      = $script:FontSmall
-$lblGpuSub.ForeColor = $theme.TextMuted
-$lblGpuSub.AutoSize  = $true
-$lblGpuSub.Location  = New-Object System.Drawing.Point(14, 26)
-$pnlGpuHeader.Controls.Add($lblGpuSub)
-$tabGPU.Controls.Add($pnlGpuHeader)
-
-# ── Scrollable body ─────────────────────────────────────────
-$pnlGpuBody = New-Object System.Windows.Forms.Panel
-$pnlGpuBody.AutoScroll = $true
-$pnlGpuBody.BackColor  = $theme.Bg
-$pnlGpuBody.Location   = New-Object System.Drawing.Point(0, 44)
-$tabGPU.Controls.Add($pnlGpuBody)
-
-# ── Left: VM list ───────────────────────────────────────────
-$grpVMs = New-ThemedGroupBox "Select VMs to Update" $pnlGpuBody
-$grpVMs.Location = New-Object System.Drawing.Point(12, 12)
-$grpVMs.Size     = New-Object System.Drawing.Size(360, 430)
+# --- Left: VM Selection ---
+$grpVMs           = New-Object System.Windows.Forms.GroupBox
+$grpVMs.Text      = "Select VMs to Update"
+$grpVMs.ForeColor = [System.Drawing.Color]::White
+$grpVMs.Location  = New-Object System.Drawing.Point(8, 18)
+$grpVMs.Size      = New-Object System.Drawing.Size(360, 400)
+$tabGPU.Controls.Add($grpVMs)
 
 $lblVmSearch = New-Object System.Windows.Forms.Label
-$lblVmSearch.Text      = "Filter:"
-$lblVmSearch.AutoSize  = $true
-$lblVmSearch.ForeColor = $theme.Text
-$lblVmSearch.Location  = New-Object System.Drawing.Point(12, 26)
+$lblVmSearch.Text = "Filter:"
+$lblVmSearch.AutoSize = $true
+$lblVmSearch.Location = New-Object System.Drawing.Point(8, 24)
+$lblVmSearch.ForeColor = [System.Drawing.Color]::White
 $grpVMs.Controls.Add($lblVmSearch)
 
 $ctrlGPU["VmSearch"] = New-Object System.Windows.Forms.TextBox
-$ctrlGPU["VmSearch"].Location   = New-Object System.Drawing.Point(58, 23)
-$ctrlGPU["VmSearch"].Size       = New-Object System.Drawing.Size(190, 24)
-$ctrlGPU["VmSearch"].BackColor  = $theme.Input
-$ctrlGPU["VmSearch"].ForeColor  = $theme.Text
-$ctrlGPU["VmSearch"].BorderStyle = 'FixedSingle'
+$ctrlGPU["VmSearch"].Location = New-Object System.Drawing.Point(52, 21)
+$ctrlGPU["VmSearch"].Size = New-Object System.Drawing.Size(210, 24)
+$ctrlGPU["VmSearch"].Text = ""
+$ctrlGPU["VmSearch"].Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $grpVMs.Controls.Add($ctrlGPU["VmSearch"])
 
 $btnClearVmSearch = New-Object System.Windows.Forms.Button
-$btnClearVmSearch.Text      = "Clear"
-$btnClearVmSearch.Size      = New-Object System.Drawing.Size(60, 24)
-$btnClearVmSearch.Location  = New-Object System.Drawing.Point(254, 23)
+$btnClearVmSearch.Text = "Clear"
+$btnClearVmSearch.Size = New-Object System.Drawing.Size(64, 24)
+$btnClearVmSearch.Location = New-Object System.Drawing.Point(270, 21)
 $btnClearVmSearch.FlatStyle = 'Flat'
-$btnClearVmSearch.BackColor = $theme.Surface
-$btnClearVmSearch.ForeColor = $theme.Text
-$btnClearVmSearch.Cursor    = [System.Windows.Forms.Cursors]::Hand
+$btnClearVmSearch.ForeColor = [System.Drawing.Color]::White
+$btnClearVmSearch.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $grpVMs.Controls.Add($btnClearVmSearch)
 
+# Scrollable panel for VM checkboxes
 $vmPanel = New-Object System.Windows.Forms.Panel
-$vmPanel.Location   = New-Object System.Drawing.Point(10, 55)
-$vmPanel.Size       = New-Object System.Drawing.Size(336, 320)
+$vmPanel.Location   = New-Object System.Drawing.Point(8, 52)
+$vmPanel.Size       = New-Object System.Drawing.Size(340, 308)
 $vmPanel.AutoScroll = $true
-$vmPanel.BackColor  = $theme.Input
-$vmPanel.BorderStyle = 'FixedSingle'
+$vmPanel.BackColor  = [System.Drawing.Color]::FromArgb(30, 30, 30)
+$vmPanel.Anchor     = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $grpVMs.Controls.Add($vmPanel)
 
 $ctrlGPU["VMCheckboxes"] = @()
@@ -3398,6 +3144,7 @@ function Update-VMList {
             $script:GpuSelectedVMs[$existingCb.Text] = [bool]$existingCb.Checked
         }
     }
+
     $vmPanel.SuspendLayout()
     try {
         $vmPanel.Controls.Clear()
@@ -3414,596 +3161,485 @@ function Update-VMList {
             $allVms
         }
 
+        # Prune stale entries for VMs that no longer exist
         $currentVmNames = @($allVms | ForEach-Object { $_.Name })
         $staleKeys = @($script:GpuSelectedVMs.Keys | Where-Object { $_ -notin $currentVmNames })
         foreach ($k in $staleKeys) { [void]$script:GpuSelectedVMs.Remove($k) }
 
-        $y = 6
+        $y = 5
         foreach ($vm in $vms) {
             $cb = New-Object System.Windows.Forms.CheckBox
-            $cb.Text      = $vm.Name
-            $cb.AutoSize  = $true
-            $cb.Location  = New-Object System.Drawing.Point(8, $y)
-            $cb.ForeColor = $theme.Text
-            $cb.FlatStyle = 'Flat'
+            $cb.Text     = $vm.Name
+            $cb.AutoSize = $true
+            $cb.Location = New-Object System.Drawing.Point(8, $y)
+            $cb.ForeColor = [System.Drawing.Color]::White
             if ($script:GpuSelectedVMs.ContainsKey($vm.Name)) {
                 $cb.Checked = [bool]$script:GpuSelectedVMs[$vm.Name]
             }
             $cb.Add_CheckedChanged({
                 if ($script:SuspendGpuSelectionEvents) { return }
-                if ($this -and $this.Text) { $script:GpuSelectedVMs[$this.Text] = [bool]$this.Checked }
-                if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) { Update-GpuActionState }
+                if ($this -and $this.Text) {
+                    $script:GpuSelectedVMs[$this.Text] = [bool]$this.Checked
+                }
+                if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+                    Update-GpuActionState
+                }
             })
             if ($toolTip) {
-                $toolTip.SetToolTip($cb, "Select this VM for GPU driver/adapter update.")
+                $toolTip.SetToolTip($cb, "Select this VM for GPU driver/adapter update. Selection is preserved while filtering and refreshing.")
             }
             $vmPanel.Controls.Add($cb)
             $checkboxes += $cb
             $y += 26
         }
         $ctrlGPU["VMCheckboxes"] = $checkboxes
-        if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) { Update-GpuActionState }
+        if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+            Update-GpuActionState
+        }
     } finally {
         $vmPanel.ResumeLayout($true)
     }
 }
+# Defer initial Update-VMList until after tooltips are created (called at line ~3245)
 
 $script:VmFilterTimer = New-Object System.Windows.Forms.Timer
 $script:VmFilterTimer.Interval = 300
-$script:VmFilterTimer.Add_Tick({ $script:VmFilterTimer.Stop(); Update-VMList })
-$ctrlGPU["VmSearch"].Add_TextChanged({ $script:VmFilterTimer.Stop(); $script:VmFilterTimer.Start() })
+$script:VmFilterTimer.Add_Tick({
+    $script:VmFilterTimer.Stop()
+    Update-VMList
+})
+$ctrlGPU["VmSearch"].Add_TextChanged({
+    $script:VmFilterTimer.Stop()
+    $script:VmFilterTimer.Start()
+})
 $btnClearVmSearch.Add_Click({ $ctrlGPU["VmSearch"].Text = ""; $script:VmFilterTimer.Stop(); Update-VMList })
 
-# Select All / None / Refresh
+# Select All / None buttons
 $btnSelectAll = New-Object System.Windows.Forms.Button
-$btnSelectAll.Text      = "All"
-$btnSelectAll.Size      = New-Object System.Drawing.Size(60, 26)
-$btnSelectAll.Location  = New-Object System.Drawing.Point(10, 384)
+$btnSelectAll.Text     = "All"
+$btnSelectAll.Size     = New-Object System.Drawing.Size(60, 24)
+$btnSelectAll.Location = New-Object System.Drawing.Point(8, 368)
 $btnSelectAll.FlatStyle = 'Flat'
-$btnSelectAll.BackColor = $theme.Surface
-$btnSelectAll.ForeColor = $theme.Text
-$btnSelectAll.Cursor    = [System.Windows.Forms.Cursors]::Hand
+$btnSelectAll.ForeColor = [System.Drawing.Color]::White
 $btnSelectAll.Add_Click({
     $script:SuspendGpuSelectionEvents = $true
-    try { foreach ($cb in $ctrlGPU["VMCheckboxes"]) { $cb.Checked = $true; if ($cb -and $cb.Text) { $script:GpuSelectedVMs[$cb.Text] = $true } } }
-    finally { $script:SuspendGpuSelectionEvents = $false }
+    try {
+        foreach ($cb in $ctrlGPU["VMCheckboxes"]) {
+            $cb.Checked = $true
+            if ($cb -and $cb.Text) { $script:GpuSelectedVMs[$cb.Text] = $true }
+        }
+    } finally {
+        $script:SuspendGpuSelectionEvents = $false
+    }
     Update-GpuActionState
 })
 $grpVMs.Controls.Add($btnSelectAll)
 
 $btnSelectNone = New-Object System.Windows.Forms.Button
-$btnSelectNone.Text      = "None"
-$btnSelectNone.Size      = New-Object System.Drawing.Size(60, 26)
-$btnSelectNone.Location  = New-Object System.Drawing.Point(76, 384)
+$btnSelectNone.Text     = "None"
+$btnSelectNone.Size     = New-Object System.Drawing.Size(60, 24)
+$btnSelectNone.Location = New-Object System.Drawing.Point(74, 368)
 $btnSelectNone.FlatStyle = 'Flat'
-$btnSelectNone.BackColor = $theme.Surface
-$btnSelectNone.ForeColor = $theme.Text
-$btnSelectNone.Cursor    = [System.Windows.Forms.Cursors]::Hand
+$btnSelectNone.ForeColor = [System.Drawing.Color]::White
 $btnSelectNone.Add_Click({
     $script:SuspendGpuSelectionEvents = $true
-    try { foreach ($cb in $ctrlGPU["VMCheckboxes"]) { $cb.Checked = $false; if ($cb -and $cb.Text) { $script:GpuSelectedVMs[$cb.Text] = $false } } }
-    finally { $script:SuspendGpuSelectionEvents = $false }
+    try {
+        foreach ($cb in $ctrlGPU["VMCheckboxes"]) {
+            $cb.Checked = $false
+            if ($cb -and $cb.Text) { $script:GpuSelectedVMs[$cb.Text] = $false }
+        }
+    } finally {
+        $script:SuspendGpuSelectionEvents = $false
+    }
     Update-GpuActionState
 })
 $grpVMs.Controls.Add($btnSelectNone)
 
 $btnRefreshVMs = New-Object System.Windows.Forms.Button
-$btnRefreshVMs.Text      = "Refresh"
-$btnRefreshVMs.Size      = New-Object System.Drawing.Size(70, 26)
-$btnRefreshVMs.Location  = New-Object System.Drawing.Point(142, 384)
+$btnRefreshVMs.Text     = "Refresh"
+$btnRefreshVMs.Size     = New-Object System.Drawing.Size(70, 24)
+$btnRefreshVMs.Location = New-Object System.Drawing.Point(140, 368)
 $btnRefreshVMs.FlatStyle = 'Flat'
-$btnRefreshVMs.BackColor = $theme.Surface
-$btnRefreshVMs.ForeColor = $theme.Text
-$btnRefreshVMs.Cursor    = [System.Windows.Forms.Cursors]::Hand
+$btnRefreshVMs.ForeColor = [System.Drawing.Color]::White
 $btnRefreshVMs.Add_Click({ Update-VMList })
 $grpVMs.Controls.Add($btnRefreshVMs)
 
-# ── Right: GPU Settings ──────────────────────────────────────
-$grpGPUSettings = New-ThemedGroupBox "GPU-P Settings" $pnlGpuBody
-$grpGPUSettings.Location = New-Object System.Drawing.Point(384, 12)
-$grpGPUSettings.Size     = New-Object System.Drawing.Size(480, 210)
+# --- Right: GPU Settings ---
+$grpGPUSettings           = New-Object System.Windows.Forms.GroupBox
+$grpGPUSettings.Text      = "GPU-P Settings"
+$grpGPUSettings.ForeColor = [System.Drawing.Color]::White
+$grpGPUSettings.Location  = New-Object System.Drawing.Point(378, 6)
+$grpGPUSettings.Size      = New-Object System.Drawing.Size(450, 190)
+$tabGPU.Controls.Add($grpGPUSettings)
 
-$lblGpuSelector = New-Object System.Windows.Forms.Label
-$lblGpuSelector.Text      = "GPU:"
-$lblGpuSelector.AutoSize  = $true
-$lblGpuSelector.ForeColor = $theme.Text
-$lblGpuSelector.Location  = New-Object System.Drawing.Point(14, 28)
-$grpGPUSettings.Controls.Add($lblGpuSelector)
+# GPU Selector
+$lblGpu = New-Object System.Windows.Forms.Label
+$lblGpu.Text     = "GPU-P GPU:"
+$lblGpu.AutoSize = $true
+$lblGpu.Location = New-Object System.Drawing.Point(12, 28)
+$lblGpu.ForeColor = [System.Drawing.Color]::White
+$grpGPUSettings.Controls.Add($lblGpu)
 
 $ctrlGPU["GpuSelector"] = New-Object System.Windows.Forms.ComboBox
 $ctrlGPU["GpuSelector"].DropDownStyle = 'DropDownList'
-$ctrlGPU["GpuSelector"].Width         = 360
-$ctrlGPU["GpuSelector"].Location      = New-Object System.Drawing.Point(54, 25)
-$ctrlGPU["GpuSelector"].BackColor     = $theme.Input
-$ctrlGPU["GpuSelector"].ForeColor     = $theme.Text
-$ctrlGPU["GpuSelector"].FlatStyle     = 'Flat'
+$ctrlGPU["GpuSelector"].Width    = 340
+$ctrlGPU["GpuSelector"].Location = New-Object System.Drawing.Point(95, 25)
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuSelector"])
 $ctrlGPU["GpuSelector"].Add_SelectedIndexChanged({
-    if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) { Update-GpuActionState }
+    if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+        Update-GpuActionState
+    }
 })
 
+# Populate GPU list
 $script:GpuPList = Get-GpuPProviders
 $script:GpuPList | ForEach-Object { [void]$ctrlGPU["GpuSelector"].Items.Add($_.Friendly) }
 if ($ctrlGPU["GpuSelector"].Items.Count -gt 0) { $ctrlGPU["GpuSelector"].SelectedIndex = 0 }
 
 if (-not $script:SupportsGpuInstancePath) {
     $lblGpuWarn = New-Object System.Windows.Forms.Label
-    $lblGpuWarn.Text      = "Note: This host uses default GPU selection for GPU-P."
-    $lblGpuWarn.AutoSize  = $true
-    $lblGpuWarn.ForeColor = $theme.Warning
-    $lblGpuWarn.Font      = $script:FontSmall
-    $lblGpuWarn.Location  = New-Object System.Drawing.Point(14, 56)
+    $lblGpuWarn.Text     = "Note: This host build uses default GPU selection for GPU-P."
+    $lblGpuWarn.AutoSize = $true
+    $lblGpuWarn.Location = New-Object System.Drawing.Point(12, 56)
+    $lblGpuWarn.ForeColor = [System.Drawing.Color]::Gold
+    $lblGpuWarn.Font     = $script:FontSmall
     $grpGPUSettings.Controls.Add($lblGpuWarn)
 }
 
-New-Divider $grpGPUSettings 14 72 446
-
+# Driver copy mode
 $lblCopyMode = New-Object System.Windows.Forms.Label
-$lblCopyMode.Text      = "Driver Copy Mode:"
-$lblCopyMode.AutoSize  = $true
-$lblCopyMode.ForeColor = $theme.Text
-$lblCopyMode.Location  = New-Object System.Drawing.Point(14, 82)
+$lblCopyMode.Text     = "Driver Copy Mode:"
+$lblCopyMode.AutoSize = $true
+$lblCopyMode.Location = New-Object System.Drawing.Point(12, 82)
+$lblCopyMode.ForeColor = [System.Drawing.Color]::White
 $grpGPUSettings.Controls.Add($lblCopyMode)
 
 $ctrlGPU["SmartCopy"] = New-Object System.Windows.Forms.RadioButton
-$ctrlGPU["SmartCopy"].Text      = "Smart  (GPU folders only — recommended)"
-$ctrlGPU["SmartCopy"].AutoSize  = $true
-$ctrlGPU["SmartCopy"].Checked   = $true
-$ctrlGPU["SmartCopy"].Location  = New-Object System.Drawing.Point(22, 104)
-$ctrlGPU["SmartCopy"].ForeColor = $theme.Text
+$ctrlGPU["SmartCopy"].Text     = "Smart (GPU folders only - recommended)"
+$ctrlGPU["SmartCopy"].AutoSize = $true
+$ctrlGPU["SmartCopy"].Checked  = $true
+$ctrlGPU["SmartCopy"].Location = New-Object System.Drawing.Point(20, 104)
+$ctrlGPU["SmartCopy"].ForeColor = [System.Drawing.Color]::White
 $grpGPUSettings.Controls.Add($ctrlGPU["SmartCopy"])
 
 $ctrlGPU["FullCopy"] = New-Object System.Windows.Forms.RadioButton
-$ctrlGPU["FullCopy"].Text      = "Full DriverStore  (larger, may need big VHD)"
-$ctrlGPU["FullCopy"].AutoSize  = $true
-$ctrlGPU["FullCopy"].Location  = New-Object System.Drawing.Point(22, 128)
-$ctrlGPU["FullCopy"].ForeColor = $theme.Text
+$ctrlGPU["FullCopy"].Text     = "Full DriverStore (larger, may need big VHD)"
+$ctrlGPU["FullCopy"].AutoSize = $true
+$ctrlGPU["FullCopy"].Location = New-Object System.Drawing.Point(20, 128)
+$ctrlGPU["FullCopy"].ForeColor = [System.Drawing.Color]::White
 $grpGPUSettings.Controls.Add($ctrlGPU["FullCopy"])
 
-New-Divider $grpGPUSettings 14 156 446
-
+# GPU Resource Allocation % (Diobyte Version 1 best practices)
 $lblGpuAlloc = New-Object System.Windows.Forms.Label
-$lblGpuAlloc.Text      = "Resource Allocation:"
-$lblGpuAlloc.AutoSize  = $true
-$lblGpuAlloc.ForeColor = $theme.Text
-$lblGpuAlloc.Location  = New-Object System.Drawing.Point(14, 166)
+$lblGpuAlloc.Text     = "GPU Resource Allocation %:"
+$lblGpuAlloc.AutoSize = $true
+$lblGpuAlloc.Location = New-Object System.Drawing.Point(12, 158)
+$lblGpuAlloc.ForeColor = [System.Drawing.Color]::White
 $grpGPUSettings.Controls.Add($lblGpuAlloc)
 
 $ctrlGPU["GpuAllocSlider"] = New-Object System.Windows.Forms.TrackBar
-$ctrlGPU["GpuAllocSlider"].Minimum       = 10
-$ctrlGPU["GpuAllocSlider"].Maximum       = 100
-$ctrlGPU["GpuAllocSlider"].Value         = 100
+$ctrlGPU["GpuAllocSlider"].Minimum  = 10
+$ctrlGPU["GpuAllocSlider"].Maximum  = 100
+$ctrlGPU["GpuAllocSlider"].Value    = 100
 $ctrlGPU["GpuAllocSlider"].TickFrequency = 10
 $ctrlGPU["GpuAllocSlider"].SmallChange   = 5
 $ctrlGPU["GpuAllocSlider"].LargeChange   = 10
-$ctrlGPU["GpuAllocSlider"].Location      = New-Object System.Drawing.Point(158, 158)
-$ctrlGPU["GpuAllocSlider"].Size          = New-Object System.Drawing.Size(240, 34)
-$ctrlGPU["GpuAllocSlider"].BackColor     = $theme.Surface
+$ctrlGPU["GpuAllocSlider"].Location = New-Object System.Drawing.Point(190, 153)
+$ctrlGPU["GpuAllocSlider"].Size     = New-Object System.Drawing.Size(200, 30)
+$ctrlGPU["GpuAllocSlider"].BackColor = [System.Drawing.Color]::FromArgb(40, 40, 40)
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuAllocSlider"])
 
 $ctrlGPU["GpuAllocLabel"] = New-Object System.Windows.Forms.Label
-$ctrlGPU["GpuAllocLabel"].Text      = "100%"
-$ctrlGPU["GpuAllocLabel"].AutoSize  = $true
-$ctrlGPU["GpuAllocLabel"].Location  = New-Object System.Drawing.Point(406, 166)
-$ctrlGPU["GpuAllocLabel"].ForeColor = $theme.Success
-$ctrlGPU["GpuAllocLabel"].Font      = $script:FontBoldLabel
+$ctrlGPU["GpuAllocLabel"].Text     = "100%"
+$ctrlGPU["GpuAllocLabel"].AutoSize = $true
+$ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point(395, 158)
+$ctrlGPU["GpuAllocLabel"].ForeColor = $theme.Info
+$ctrlGPU["GpuAllocLabel"].Font = $script:FontBoldLabel
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuAllocLabel"])
-$ctrlGPU["GpuAllocSlider"].Add_ValueChanged({ $ctrlGPU["GpuAllocLabel"].Text = "$($ctrlGPU['GpuAllocSlider'].Value)%" })
 
-# ── Right: GPU Options ───────────────────────────────────────
-$grpGPUOpts = New-ThemedGroupBox "GPU Update Options" $pnlGpuBody
-$grpGPUOpts.Location = New-Object System.Drawing.Point(384, 234)
-$grpGPUOpts.Size     = New-Object System.Drawing.Size(480, 140)
+$ctrlGPU["GpuAllocSlider"].Add_ValueChanged({
+    $ctrlGPU["GpuAllocLabel"].Text = "$($ctrlGPU['GpuAllocSlider'].Value)%"
+})
 
-foreach ($chkDef in @(
-    @{ Key = "StartVM";       Text = "Start VM after update";                         X = 14; Y = 26; Default = $false },
-    @{ Key = "AutoExpand";    Text = "Auto-expand VHD if insufficient space";         X = 14; Y = 56; Default = $true  },
-    @{ Key = "CopySvcDriver"; Text = "Copy GPU service driver (recommended)";         X = 14; Y = 86; Default = $true  },
-    @{ Key = "StrictChecks";  Text = "Strict GPU safety checks";                     X = 246;Y = 26; Default = $true  }
-)) {
-    $cb = New-Object System.Windows.Forms.CheckBox
-    $cb.Text      = $chkDef.Text
-    $cb.AutoSize  = $true
-    $cb.Checked   = $chkDef.Default
-    $cb.Location  = New-Object System.Drawing.Point($chkDef.X, $chkDef.Y)
-    $cb.ForeColor = $theme.Text
-    $cb.FlatStyle = 'Flat'
-    $grpGPUOpts.Controls.Add($cb)
-    $ctrlGPU[$chkDef.Key] = $cb
-}
+# GPU Options
+$grpGPUOpts           = New-Object System.Windows.Forms.GroupBox
+$grpGPUOpts.Text      = "Options"
+$grpGPUOpts.ForeColor = [System.Drawing.Color]::White
+$grpGPUOpts.Location  = New-Object System.Drawing.Point(378, 200)
+$grpGPUOpts.Size      = New-Object System.Drawing.Size(450, 122)
+$tabGPU.Controls.Add($grpGPUOpts)
 
-# ── GPU action row ───────────────────────────────────────────
-$btnUpdateGPU = New-Object System.Windows.Forms.Button
+$ctrlGPU["StartVM"] = New-Object System.Windows.Forms.CheckBox
+$ctrlGPU["StartVM"].Text     = "Start VM after update"
+$ctrlGPU["StartVM"].AutoSize = $true
+$ctrlGPU["StartVM"].Location = New-Object System.Drawing.Point(12, 24)
+$ctrlGPU["StartVM"].ForeColor = [System.Drawing.Color]::White
+$grpGPUOpts.Controls.Add($ctrlGPU["StartVM"])
+
+$ctrlGPU["AutoExpand"] = New-Object System.Windows.Forms.CheckBox
+$ctrlGPU["AutoExpand"].Text     = "Auto-expand VHD if insufficient space"
+$ctrlGPU["AutoExpand"].AutoSize = $true
+$ctrlGPU["AutoExpand"].Checked  = $true
+$ctrlGPU["AutoExpand"].Location = New-Object System.Drawing.Point(12, 48)
+$ctrlGPU["AutoExpand"].ForeColor = [System.Drawing.Color]::White
+$grpGPUOpts.Controls.Add($ctrlGPU["AutoExpand"])
+
+$ctrlGPU["CopySvcDriver"] = New-Object System.Windows.Forms.CheckBox
+$ctrlGPU["CopySvcDriver"].Text     = "Copy GPU service driver (recommended)"
+$ctrlGPU["CopySvcDriver"].AutoSize = $true
+$ctrlGPU["CopySvcDriver"].Checked  = $true
+$ctrlGPU["CopySvcDriver"].Location = New-Object System.Drawing.Point(12, 72)
+$ctrlGPU["CopySvcDriver"].ForeColor = [System.Drawing.Color]::White
+$grpGPUOpts.Controls.Add($ctrlGPU["CopySvcDriver"])
+
+$ctrlGPU["StrictChecks"] = New-Object System.Windows.Forms.CheckBox
+$ctrlGPU["StrictChecks"].Text     = "Strict GPU safety checks"
+$ctrlGPU["StrictChecks"].AutoSize = $true
+$ctrlGPU["StrictChecks"].Checked  = $true
+$ctrlGPU["StrictChecks"].Location = New-Object System.Drawing.Point(12, 96)
+$ctrlGPU["StrictChecks"].ForeColor = [System.Drawing.Color]::White
+$grpGPUOpts.Controls.Add($ctrlGPU["StrictChecks"])
+
+# Update GPU Button
+$btnUpdateGPU           = New-Object System.Windows.Forms.Button
 $btnUpdateGPU.Text      = "Update GPU Drivers"
-$btnUpdateGPU.Size      = New-Object System.Drawing.Size(180, 42)
-$btnUpdateGPU.Location  = New-Object System.Drawing.Point(384, 388)
+$btnUpdateGPU.Size      = New-Object System.Drawing.Size(160, 36)
+$btnUpdateGPU.Location  = New-Object System.Drawing.Point(540, 448)
 $btnUpdateGPU.FlatStyle = 'Flat'
-$btnUpdateGPU.BackColor = $theme.Success
+$btnUpdateGPU.BackColor = [System.Drawing.Color]::FromArgb(0, 153, 51)
 $btnUpdateGPU.ForeColor = [System.Drawing.Color]::White
 $btnUpdateGPU.Font      = $script:FontBoldButton
-$btnUpdateGPU.Cursor    = [System.Windows.Forms.Cursors]::Hand
-$btnUpdateGPU.FlatAppearance.BorderColor        = $theme.SuccessHover
-$btnUpdateGPU.FlatAppearance.MouseOverBackColor = $theme.SuccessHover
-$btnUpdateGPU.FlatAppearance.MouseDownBackColor = $theme.SuccessHover
-$pnlGpuBody.Controls.Add($btnUpdateGPU)
+$tabGPU.Controls.Add($btnUpdateGPU)
 
 $ctrlGPU["SelectionHint"] = New-Object System.Windows.Forms.Label
-$ctrlGPU["SelectionHint"].Text      = "Select at least one VM to enable GPU update."
-$ctrlGPU["SelectionHint"].Size      = New-Object System.Drawing.Size(480, 28)
-$ctrlGPU["SelectionHint"].Location  = New-Object System.Drawing.Point(384, 440)
+$ctrlGPU["SelectionHint"].Text = "Select at least one VM to enable GPU update."
+$ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size(500, 34)
+$ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point(378, 492)
 $ctrlGPU["SelectionHint"].ForeColor = $theme.Muted
 $ctrlGPU["SelectionHint"].AutoEllipsis = $true
-$pnlGpuBody.Controls.Add($ctrlGPU["SelectionHint"])
+$ctrlGPU["SelectionHint"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlGPU["SelectionHint"].AutoSize = $false
+$tabGPU.Controls.Add($ctrlGPU["SelectionHint"])
 
 $ctrlGPU["GpuStatus"] = New-Object System.Windows.Forms.Label
-$ctrlGPU["GpuStatus"].Text      = ""
-$ctrlGPU["GpuStatus"].Size      = New-Object System.Drawing.Size(480, 28)
-$ctrlGPU["GpuStatus"].Location  = New-Object System.Drawing.Point(384, 470)
+$ctrlGPU["GpuStatus"].Text = ""
+$ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size(500, 34)
+$ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point(378, 514)
 $ctrlGPU["GpuStatus"].ForeColor = $theme.Info
 $ctrlGPU["GpuStatus"].AutoEllipsis = $true
-$pnlGpuBody.Controls.Add($ctrlGPU["GpuStatus"])
+$ctrlGPU["GpuStatus"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlGPU["GpuStatus"].AutoSize = $false
+$tabGPU.Controls.Add($ctrlGPU["GpuStatus"])
 
 # ============================================================
-#  PANEL 3:  ENVIRONMENT
+#  TAB 3: ENVIRONMENT
 # ============================================================
-$tabEnv = New-Object System.Windows.Forms.Panel
-$tabEnv.Dock       = [System.Windows.Forms.DockStyle]::Fill
-$tabEnv.BackColor  = $theme.Bg
-$tabEnv.AutoScroll = $true
-$tabEnv.Visible    = $false
-$pnlContent.Controls.Add($tabEnv)
+$tabEnv             = New-Object System.Windows.Forms.TabPage
+$tabEnv.Text        = "  Environment  "
+# $tabEnv.BackColor   = $theme.Card
+# $tabEnv.ForeColor   = $theme.Text
+$tabEnv.AutoScroll  = $true
+$tabEnv.Padding     = New-Object System.Windows.Forms.Padding(8)
+$tabControl.TabPages.Add($tabEnv)
+
+$lblEnvHeader = New-Object System.Windows.Forms.Label
+$lblEnvHeader.Text = "System environment information and Hyper-V status"
+$lblEnvHeader.AutoSize = $true
+$lblEnvHeader.Location = New-Object System.Drawing.Point(10, 2)
+$lblEnvHeader.ForeColor = $theme.Muted
+$lblEnvHeader.Font = $script:FontHeader
+$tabEnv.Controls.Add($lblEnvHeader)
 
 $ctrlEnv = @{}
 
-# ── Panel header ────────────────────────────────────────────
-$pnlEnvHeader = New-Object System.Windows.Forms.Panel
-$pnlEnvHeader.Dock      = [System.Windows.Forms.DockStyle]::Top
-$pnlEnvHeader.Height    = 44
-$pnlEnvHeader.BackColor = $theme.Card
+# GroupBox: System Information
+$grpSysInfo           = New-Object System.Windows.Forms.GroupBox
+$grpSysInfo.Text      = "System Information"
+$grpSysInfo.ForeColor = [System.Drawing.Color]::White
+$grpSysInfo.Location  = New-Object System.Drawing.Point(8, 18)
+$grpSysInfo.Size      = New-Object System.Drawing.Size(600, 200)
+$tabEnv.Controls.Add($grpSysInfo)
 
-$lblEnvTitle = New-Object System.Windows.Forms.Label
-$lblEnvTitle.Text      = "Environment"
-$lblEnvTitle.Font      = $script:FontTabHeader
-$lblEnvTitle.ForeColor = $theme.TextHigh
-$lblEnvTitle.AutoSize  = $true
-$lblEnvTitle.Location  = New-Object System.Drawing.Point(14, 8)
-$pnlEnvHeader.Controls.Add($lblEnvTitle)
+$rowY = 22
+$ctrlEnv["HostOS"] = New-LabeledControl $grpSysInfo 12 $rowY "Host OS:" -ControlWidth 400 -ControlType Label
+$ctrlEnv["HostOS"].Text = $script:HostOsName
+$rowY += 36
 
-$lblEnvSub = New-Object System.Windows.Forms.Label
-$lblEnvSub.Text      = "System information, Hyper-V status, and post-install software options"
-$lblEnvSub.Font      = $script:FontSmall
-$lblEnvSub.ForeColor = $theme.TextMuted
-$lblEnvSub.AutoSize  = $true
-$lblEnvSub.Location  = New-Object System.Drawing.Point(14, 26)
-$pnlEnvHeader.Controls.Add($lblEnvSub)
-$tabEnv.Controls.Add($pnlEnvHeader)
+$ctrlEnv["HyperVStatus"] = New-LabeledControl $grpSysInfo 12 $rowY "Hyper-V Status:" -ControlWidth 400 -ControlType Label
+$hyperVFeature = Get-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -ErrorAction SilentlyContinue
+$hyperVStatus = if ($hyperVFeature -and $hyperVFeature.State -eq "Enabled") { "Enabled" } else { "Disabled" }
+$ctrlEnv["HyperVStatus"].Text = $hyperVStatus
+$rowY += 36
 
-# ── Scrollable body ─────────────────────────────────────────
-$pnlEnvBody = New-Object System.Windows.Forms.Panel
-$pnlEnvBody.AutoScroll = $true
-$pnlEnvBody.BackColor  = $theme.Bg
-$pnlEnvBody.Location   = New-Object System.Drawing.Point(0, 44)
-$tabEnv.Controls.Add($pnlEnvBody)
+$ctrlEnv["VMMSService"] = New-LabeledControl $grpSysInfo 12 $rowY "VMMS Service:" -ControlWidth 400 -ControlType Label
+$vmmsService = Get-Service -Name vmms -ErrorAction SilentlyContinue
+$vmmsStatus = if ($vmmsService) { $vmmsService.Status } else { "Not found" }
+$ctrlEnv["VMMSService"].Text = $vmmsStatus
+$rowY += 36
 
-# ── System Information ───────────────────────────────────────
-$grpSysInfo = New-ThemedGroupBox "System Information" $pnlEnvBody
-$grpSysInfo.Location = New-Object System.Drawing.Point(12, 12)
-$grpSysInfo.Size     = New-Object System.Drawing.Size(520, 200)
+$ctrlEnv["TotalRAM"] = New-LabeledControl $grpSysInfo 12 $rowY "Total RAM (GB):" -ControlWidth 400 -ControlType Label
+$totalRamGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$ctrlEnv["TotalRAM"].Text = $totalRamGB
+$rowY += 36
 
-$envRowY = 26
-foreach ($row in @(
-    @{ Key = "HostOS";          Label = "Host OS:";               Value = $script:HostOsName },
-    @{ Key = "HyperVStatus";    Label = "Hyper-V Status:";        Value = "" },
-    @{ Key = "VMMSService";     Label = "VMMS Service:";          Value = "" },
-    @{ Key = "TotalRAM";        Label = "Total RAM (GB):";        Value = "" },
-    @{ Key = "ProcessorCount";  Label = "Logical Processors:";    Value = [string][Environment]::ProcessorCount }
-)) {
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text      = $row.Label
-    $lbl.ForeColor = $theme.Text
-    $lbl.AutoSize  = $false
-    $lbl.Size      = New-Object System.Drawing.Size(150, 22)
-    $lbl.Location  = New-Object System.Drawing.Point(14, $envRowY)
-    $lbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-    $grpSysInfo.Controls.Add($lbl)
+$ctrlEnv["ProcessorCount"] = New-LabeledControl $grpSysInfo 12 $rowY "Logical Processors:" -ControlWidth 400 -ControlType Label
+$ctrlEnv["ProcessorCount"].Text = [Environment]::ProcessorCount
 
-    $val = New-Object System.Windows.Forms.Label
-    $val.Text      = $row.Value
-    $val.ForeColor = $theme.Info
-    $val.AutoSize  = $true
-    $val.Location  = New-Object System.Drawing.Point(168, ($envRowY + 2))
-    $grpSysInfo.Controls.Add($val)
-    $ctrlEnv[$row.Key] = $val
-    $envRowY += 34
-}
+# GroupBox: GPU Information
+$grpGpuInfo           = New-Object System.Windows.Forms.GroupBox
+$grpGpuInfo.Text      = "GPU Information"
+$grpGpuInfo.ForeColor = [System.Drawing.Color]::White
+$grpGpuInfo.Location  = New-Object System.Drawing.Point(620, 18)
+$grpGpuInfo.Size      = New-Object System.Drawing.Size(600, 200)
+$tabEnv.Controls.Add($grpGpuInfo)
 
-# Now fill in the ones that need live queries
-try {
-    $hyperVFeature = Get-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -ErrorAction SilentlyContinue
-    $ctrlEnv["HyperVStatus"].Text = if ($hyperVFeature -and $hyperVFeature.State -eq "Enabled") { "Enabled" } else { "Disabled" }
-} catch { $ctrlEnv["HyperVStatus"].Text = "Unknown" }
+$rowY = 22
+$ctrlEnv["GpuPEnabled"] = New-LabeledControl $grpGpuInfo 12 $rowY "GPU-P Available:" -ControlWidth 400 -ControlType Label
+$ctrlEnv["GpuPEnabled"].Text = if ($script:SupportsGpuInstancePath) { "Yes" } else { "No" }
+$rowY += 36
 
-try {
-    $vmmsService = Get-Service -Name vmms -ErrorAction SilentlyContinue
-    $ctrlEnv["VMMSService"].Text = if ($vmmsService) { [string]$vmmsService.Status } else { "Not found" }
-} catch { $ctrlEnv["VMMSService"].Text = "Unknown" }
+$ctrlEnv["GpuCount"] = New-LabeledControl $grpGpuInfo 12 $rowY "GPU Count:" -ControlWidth 400 -ControlType Label
+$gpuCount = (Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Measure-Object).Count
+$ctrlEnv["GpuCount"].Text = $gpuCount
 
-$ctrlEnv["TotalRAM"].Text = [string][math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+# GroupBox: Software && Settings
+$grpSoft           = New-Object System.Windows.Forms.GroupBox
+$grpSoft.Text      = "Software && Settings"
+$grpSoft.ForeColor = [System.Drawing.Color]::White
+$grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+$tabEnv.Controls.Add($grpSoft)
 
-# ── GPU Information ─────────────────────────────────────────
-$grpGpuInfo = New-ThemedGroupBox "GPU Information" $pnlEnvBody
-$grpGpuInfo.Location = New-Object System.Drawing.Point(544, 12)
-$grpGpuInfo.Size     = New-Object System.Drawing.Size(380, 120)
-
-$gpuRowY = 26
-foreach ($row in @(
-    @{ Key = "GpuPEnabled"; Label = "GPU-P Available:"; Value = $(if ($script:SupportsGpuInstancePath) { "Yes" } else { "No" }) },
-    @{ Key = "GpuCount";    Label = "GPU Count:";       Value = "" }
-)) {
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text      = $row.Label
-    $lbl.ForeColor = $theme.Text
-    $lbl.AutoSize  = $false
-    $lbl.Size      = New-Object System.Drawing.Size(130, 22)
-    $lbl.Location  = New-Object System.Drawing.Point(14, $gpuRowY)
-    $lbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-    $grpGpuInfo.Controls.Add($lbl)
-
-    $val = New-Object System.Windows.Forms.Label
-    $val.Text      = $row.Value
-    $val.ForeColor = $theme.Info
-    $val.AutoSize  = $true
-    $val.Location  = New-Object System.Drawing.Point(148, ($gpuRowY + 2))
-    $grpGpuInfo.Controls.Add($val)
-    $ctrlEnv[$row.Key] = $val
-    $gpuRowY += 34
-}
-
-try {
-    $ctrlEnv["GpuCount"].Text = [string](Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Measure-Object).Count
-} catch { $ctrlEnv["GpuCount"].Text = "0" }
-
-# ── Software & Settings ──────────────────────────────────────
-$grpSoft = New-ThemedGroupBox "Software && Settings" $pnlEnvBody
-$grpSoft.Location = New-Object System.Drawing.Point(12, 224)
-$grpSoft.Size     = New-Object System.Drawing.Size(912, 280)
-$grpSoft.Anchor   = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-
-$softItems = @(
-    @{ Key = "Parsec";            Text = "Parsec (Per Computer)";          X = 14;  Y = 28  },
-    @{ Key = "VBCable";           Text = "VB-Audio Cable";                 X = 270; Y = 28  },
-    @{ Key = "USBMMIDD";          Text = "Virtual Display Driver";         X = 14;  Y = 58  },
-    @{ Key = "RDP";               Text = "Remote Desktop";                 X = 270; Y = 58  },
-    @{ Key = "Share";             Text = "Share Folder";                   X = 14;  Y = 88  },
-    @{ Key = "PauseUpdate";       Text = "Pause Windows Updates";          X = 270; Y = 88  },
-    @{ Key = "FullUpdate";        Text = "Full Windows Updates";           X = 14;  Y = 118 },
-    @{ Key = "NestedVirt";        Text = "Nested Virtualization";          X = 270; Y = 118 },
-    @{ Key = "NestedNetFollowup"; Text = "Nested Net (MAC spoofing)";      X = 14;  Y = 148 },
-    @{ Key = "ResetBootOrder";    Text = "Reset boot order after recovery";X = 270; Y = 148 },
-    @{ Key = "GoldenImage";       Text = "Create from Golden VHDX";       X = 14;  Y = 178 }
+$softwareChecks = @(
+    @{ Key = "Parsec";       Text = "Parsec (Per Computer)";  X = 14;  Y = 28 },
+    @{ Key = "VBCable";      Text = "VB-Audio Cable";         X = 274; Y = 28 },
+    @{ Key = "USBMMIDD";     Text = "Virtual Display Driver"; X = 14;  Y = 58 },
+    @{ Key = "RDP";          Text = "Remote Desktop";         X = 274; Y = 58 },
+    @{ Key = "Share";        Text = "Share Folder";           X = 14;  Y = 88 },
+    @{ Key = "PauseUpdate";  Text = "Pause Win Updates";      X = 274; Y = 88 },
+    @{ Key = "FullUpdate";   Text = "Full Win Updates";       X = 14;  Y = 118 },
+    @{ Key = "NestedVirt";   Text = "Nested Virtualization";  X = 274; Y = 118 },
+    @{ Key = "NestedNetFollowup"; Text = "Nested Net (MAC spoofing)"; X = 14;  Y = 148 },
+    @{ Key = "ResetBootOrder";    Text = "Reset boot order after recovery"; X = 274; Y = 148 },
+    @{ Key = "GoldenImage";       Text = "Create from Golden VHDX"; X = 14; Y = 178 }
 )
-foreach ($sw in $softItems) {
+foreach ($sw in $softwareChecks) {
     $cb = New-Object System.Windows.Forms.CheckBox
-    $cb.Text      = $sw.Text
-    $cb.AutoSize  = $true
-    $cb.Location  = New-Object System.Drawing.Point($sw.X, $sw.Y)
-    $cb.ForeColor = $theme.Text
-    $cb.FlatStyle = 'Flat'
+    $cb.Text     = $sw.Text
+    $cb.AutoSize = $true
+    $cb.Checked  = $false
+    $cb.Location = New-Object System.Drawing.Point($sw.X, $sw.Y)
+    $cb.ForeColor = [System.Drawing.Color]::White
     $grpSoft.Controls.Add($cb)
     $ctrlCreate[$sw.Key] = $cb
 }
 
-$goldenLabel = New-Object System.Windows.Forms.Label
-$goldenLabel.Text      = "Parent VHDX:"
-$goldenLabel.ForeColor = $theme.Text
-$goldenLabel.AutoSize  = $false
-$goldenLabel.Size      = New-Object System.Drawing.Size(100, 22)
-$goldenLabel.Location  = New-Object System.Drawing.Point(14, 216)
-$goldenLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-$grpSoft.Controls.Add($goldenLabel)
+$ctrlCreate["GoldenParentVHD"] = New-LabeledControl $grpSoft 14 212 "Parent VHDX:" -ControlWidth 315
+$btnBrowseGolden = New-Object System.Windows.Forms.Button
+$btnBrowseGolden.Text     = "Browse"
+$btnBrowseGolden.Size     = New-Object System.Drawing.Size(52, 24)
+$btnBrowseGolden.Location = New-Object System.Drawing.Point(438, 210)
+$btnBrowseGolden.FlatStyle = 'Flat'
+$grpSoft.Controls.Add($btnBrowseGolden)
 
-$ctrlCreate["GoldenParentVHD"] = New-Object System.Windows.Forms.TextBox
-$ctrlCreate["GoldenParentVHD"].Location   = New-Object System.Drawing.Point(118, 214)
-$ctrlCreate["GoldenParentVHD"].Size       = New-Object System.Drawing.Size(680, 24)
-$ctrlCreate["GoldenParentVHD"].BackColor  = $theme.Input
-$ctrlCreate["GoldenParentVHD"].ForeColor  = $theme.Text
-$ctrlCreate["GoldenParentVHD"].BorderStyle = 'FixedSingle'
-$grpSoft.Controls.Add($ctrlCreate["GoldenParentVHD"])
+# ============================================================
+#  SHARED LOG PANEL
+# ============================================================
+$script:LogBox           = New-Object System.Windows.Forms.RichTextBox
+$script:LogBox.Location  = New-Object System.Drawing.Point(10, 720)
+$script:LogBox.Size      = New-Object System.Drawing.Size(1200, 130)
+$script:LogBox.ReadOnly  = $true
+$script:LogBox.BackColor = $theme.Input
+$script:LogBox.ForeColor = $theme.Text
+$script:LogBox.Font      = $script:FontConsolas
+$script:LogBox.WordWrap  = $false
+$script:LogBox.ScrollBars = 'Both'
+$script:LogBox.BorderStyle = 'FixedSingle'
+$form.Controls.Add($script:LogBox)
 
-$btnBrowseGoldenEnv = New-Object System.Windows.Forms.Button
-$btnBrowseGoldenEnv.Text      = "Browse"
-$btnBrowseGoldenEnv.Size      = New-Object System.Drawing.Size(64, 24)
-$btnBrowseGoldenEnv.Location  = New-Object System.Drawing.Point(810, 214)
-$btnBrowseGoldenEnv.FlatStyle = 'Flat'
-$btnBrowseGoldenEnv.BackColor = $theme.Surface
-$btnBrowseGoldenEnv.ForeColor = $theme.Text
-$btnBrowseGoldenEnv.Cursor    = [System.Windows.Forms.Cursors]::Hand
-$grpSoft.Controls.Add($btnBrowseGoldenEnv)
-$btnBrowseGoldenEnv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+# Clear Log button
+$btnClearLog           = New-Object System.Windows.Forms.Button
+$btnClearLog.Text      = "Clear Log"
+$btnClearLog.Size      = New-Object System.Drawing.Size(85, 30)
+$btnClearLog.Location  = New-Object System.Drawing.Point(1220, 720)
+$btnClearLog.FlatStyle = 'Flat'
+$btnClearLog.ForeColor = [System.Drawing.Color]::White
+$btnClearLog.Add_Click({ $script:LogBox.Clear() })
+$form.Controls.Add($btnClearLog)
+
+# Save Log button
+$btnSaveLog            = New-Object System.Windows.Forms.Button
+$btnSaveLog.Text       = "Save Log"
+$btnSaveLog.Size       = New-Object System.Drawing.Size(85, 30)
+$btnSaveLog.Location   = New-Object System.Drawing.Point(1220, 755)
+$btnSaveLog.FlatStyle  = 'Flat'
+$btnSaveLog.ForeColor  = [System.Drawing.Color]::White
+$btnSaveLog.Add_Click({
+    $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
     try {
-        $dlg.Filter = "Virtual Hard Disk|*.vhdx;*.vhd"
-        $dlg.Title  = "Select parent Golden VHDX/VHD"
-        if ($dlg.ShowDialog() -eq 'OK') { $ctrlCreate["GoldenParentVHD"].Text = $dlg.FileName }
-    } finally { $dlg.Dispose() }
-})
-
-# Alias: keep $btnBrowseGolden pointing to the env-tab browse button used by existing handlers
-$btnBrowseGolden = $btnBrowseGoldenEnv
-
-# ============================================================
-#  NAVIGATION SWITCH LOGIC
-# ============================================================
-$script:NavPanels    = @($tabCreate, $tabGPU, $tabEnv)
-$script:ActiveNavIdx = 0
-
-function Switch-NavPanel {
-    param([int]$Index)
-    for ($i = 0; $i -lt $script:NavPanels.Count; $i++) {
-        $script:NavPanels[$i].Visible = ($i -eq $Index)
-    }
-    $script:ActiveNavIdx = $Index
-
-    for ($i = 0; $i -lt $script:NavButtons.Count; $i++) {
-        if ($i -eq $Index) {
-            $script:NavButtons[$i].BackColor = $theme.SidebarActive
-            $script:NavButtons[$i].ForeColor = [System.Drawing.Color]::White
-        } else {
-            $script:NavButtons[$i].BackColor = $theme.Sidebar
-            $script:NavButtons[$i].ForeColor = $theme.TextMuted
+        $saveDlg.Filter = "Log files (*.log)|*.log|Text files (*.txt)|*.txt|All files (*.*)|*.*"
+        $saveDlg.FileName = "HyperV-Toolkit_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+        if ($saveDlg.ShowDialog() -eq 'OK') {
+            try {
+                $script:LogBox.Text | Out-File -FilePath $saveDlg.FileName -Encoding UTF8 -Force
+                Write-Log "Log saved to: $($saveDlg.FileName)" "OK"
+            } catch {
+                Write-Log "Failed to save log: $($_.Exception.Message)" "ERROR"
+            }
         }
+    } finally {
+        $saveDlg.Dispose()
     }
+})
+$form.Controls.Add($btnSaveLog)
 
-    $form.AcceptButton = switch ($Index) {
-        0 { $btnCreateVM }
-        1 { $btnUpdateGPU }
-        default { $null }
-    }
-}
+# Exit Button
+$btnExit           = New-Object System.Windows.Forms.Button
+$btnExit.Text      = "Exit"
+$btnExit.Size      = New-Object System.Drawing.Size(85, 30)
+$btnExit.Location  = New-Object System.Drawing.Point(1220, 790)
+$btnExit.FlatStyle = 'Flat'
+$btnExit.BackColor = [System.Drawing.Color]::FromArgb(180, 40, 40)
+$btnExit.ForeColor = [System.Drawing.Color]::White
+$btnExit.Add_Click({ $form.Close() })
+$form.Controls.Add($btnExit)
 
-$btnNavCreate.Add_Click({ Switch-NavPanel -Index 0 })
-$btnNavGPU.Add_Click({    Switch-NavPanel -Index 1 })
-$btnNavEnv.Add_Click({    Switch-NavPanel -Index 2 })
+# ---- Adaptive main layout (DPI/resolution friendly) ----
+$tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 
-# Activate Create VM by default
-Switch-NavPanel -Index 0
-
-# ============================================================
-#  TABCONTROL COMPATIBILITY SHIM
-#  (Event handlers reference $tabControl.Enabled,
-#   .SelectedIndex, and .SelectedTab — shim keeps them working)
-# ============================================================
-$tabControl = New-Object PSObject
-$tabControl | Add-Member -MemberType NoteProperty -Name "_Enabled"   -Value $true
-$tabControl | Add-Member -MemberType NoteProperty -Name "_SelIdx"    -Value 0
-$tabControl | Add-Member -MemberType NoteProperty -Name "SelectedTab" -Value $tabCreate
-$tabControl | Add-Member -MemberType ScriptProperty -Name "Enabled" `
-    -Value       { return $this._Enabled } `
-    -SecondValue {
-        param($v)
-        $this._Enabled = $v
-        foreach ($p in $script:NavPanels) { $p.Enabled = $v }
-        foreach ($nb in $script:NavButtons) { $nb.Enabled = $v }
-    }
-$tabControl | Add-Member -MemberType ScriptProperty -Name "SelectedIndex" `
-    -Value       { return $this._SelIdx } `
-    -SecondValue {
-        param($v)
-        $this._SelIdx = $v
-        $this.SelectedTab = $script:NavPanels[[Math]::Max(0, [Math]::Min($v, $script:NavPanels.Count - 1))]
-        Switch-NavPanel -Index $v
-    }
-
-# ============================================================
-#  ADAPTIVE BODY PANELS (resize to fill the scrollable body)
-# ============================================================
 function Update-MainLayout {
     param([System.Windows.Forms.Form]$RootForm)
+
     if (-not $RootForm -or $RootForm.IsDisposed) { return }
+    if (-not $tabControl -or -not $script:LogBox -or -not $btnClearLog -or -not $btnSaveLog -or -not $btnExit) { return }
+
     try {
         $RootForm.SuspendLayout()
+        $margin = 10
+        $rightButtonColWidth = 85
+        $rightButtonGap = 10
+        $buttonStackGap = 35
 
-        # Header status label: keep near right side of header
-        if ($script:HeaderStatusLabel -and $pnlHeader) {
-            $script:HeaderStatusLabel.Location = New-Object System.Drawing.Point(
-                [Math]::Max(360, ($pnlHeader.Width - $script:HeaderStatusLabel.Width - 24)), 18)
-        }
+        $tabWidth = [Math]::Max(720, $RootForm.ClientSize.Width - 2 * $margin)
+        $tabHeight = [Math]::Max(620, [Math]::Min(760, $RootForm.ClientSize.Height - 210))
+        $tabControl.Location = New-Object System.Drawing.Point($margin, 8)
+        $tabControl.Size = New-Object System.Drawing.Size($tabWidth, $tabHeight)
 
-        # Body panels fill the tab panel's client area
-        $contentW = $pnlContent.ClientSize.Width
-        $contentH = $pnlContent.ClientSize.Height
+        $logY = $tabControl.Bottom + 12
+        $buttonX = [Math]::Max($margin + 600, $RootForm.ClientSize.Width - $rightButtonColWidth - $margin)
+        $buttonX = [Math]::Min($buttonX, [Math]::Max($margin, ($RootForm.ClientSize.Width - $rightButtonColWidth - $margin)))
+        $logWidth = [Math]::Max(500, $buttonX - $margin - $rightButtonGap)
+        $logWidth = [Math]::Min($logWidth, [Math]::Max(320, ($RootForm.ClientSize.Width - $rightButtonColWidth - $rightButtonGap - (2 * $margin))))
+        $availableLogHeight = $RootForm.ClientSize.Height - $logY - $margin
+        $logHeight = [Math]::Max(90, [Math]::Min(145, $availableLogHeight))
 
-        foreach ($panel in @($tabCreate, $tabGPU, $tabEnv)) {
-            $panel.Size = New-Object System.Drawing.Size($contentW, $contentH)
-        }
+        $script:LogBox.Location = New-Object System.Drawing.Point($margin, $logY)
+        $script:LogBox.Size = New-Object System.Drawing.Size($logWidth, $logHeight)
 
-        # Create VM body fills remaining below its header
-        if ($pnlCreateBody) {
-            $pnlCreateBody.Size = New-Object System.Drawing.Size($contentW, [Math]::Max(100, $contentH - 44))
-        }
-        # GPU body
-        if ($pnlGpuBody) {
-            $pnlGpuBody.Size = New-Object System.Drawing.Size($contentW, [Math]::Max(100, $contentH - 44))
-        }
-        # Env body
-        if ($pnlEnvBody) {
-            $pnlEnvBody.Size = New-Object System.Drawing.Size($contentW, [Math]::Max(100, $contentH - 44))
-        }
+        $btnClearLog.Location = New-Object System.Drawing.Point($buttonX, $logY)
+        $btnSaveLog.Location = New-Object System.Drawing.Point($buttonX, ($logY + $buttonStackGap))
+        $btnExit.Location = New-Object System.Drawing.Point($buttonX, ($logY + 2 * $buttonStackGap))
 
-        # Reposition action strip at bottom of create body
-        if ($pnlCreateAction -and $pnlCreateBody) {
-            $actionY = [Math]::Max($grpOpts.Bottom, $grpConfig.Bottom) + 14
-            $pnlCreateAction.Location = New-Object System.Drawing.Point(0, $actionY)
-            $pnlCreateAction.Width    = [Math]::Max(600, $pnlCreateBody.ClientSize.Width)
-
-            # Create VM button: right side of action panel
-            $btnW = $btnCreateVM.Width
-            $btnCreateVM.Location = New-Object System.Drawing.Point(
-                [Math]::Max(500, $pnlCreateAction.Width - $btnW - 20), 14)
-        }
-
-        # Adapt grpConfig width to available space
-        if ($pnlCreateBody -and $pnlCreateBody.ClientSize.Width -gt 0) {
-            $availW = $pnlCreateBody.ClientSize.Width
-            $cfgRight = [Math]::Min(480, [int]($availW * 0.48))
-            $grpConfig.Width = [Math]::Max(440, $cfgRight)
-
-            $rightX   = $grpConfig.Right + 12
-            $rightW   = [Math]::Max(440, $availW - $rightX - 12)
-            $grpBoot.Location = New-Object System.Drawing.Point($rightX, 12)
-            $grpBoot.Width    = $rightW
-            $grpOpts.Location = New-Object System.Drawing.Point($rightX, ($grpBoot.Bottom + 10))
-            $grpOpts.Width    = $rightW
-
-            # Resize browse buttons to stay near right edge of grpConfig
-            $browseRightX = [Math]::Max(360, $grpConfig.Width - 72)
-            if ($btnBrowseVM) {
-                $btnBrowseVM.Location  = New-Object System.Drawing.Point($browseRightX, $btnBrowseVM.Top)
-                $ctrlCreate["VMLocation"].Width = [Math]::Max(140, $browseRightX - $ctrlCreate["VMLocation"].Left - 8)
-            }
-            if ($btnBrowseISO) {
-                $btnBrowseISO.Location = New-Object System.Drawing.Point($browseRightX, $btnBrowseISO.Top)
-                $ctrlCreate["ISOPath"].Width    = [Math]::Max(140, $browseRightX - $ctrlCreate["ISOPath"].Left - 8)
-            }
-        }
-
-        # Adapt GPU panel widths
-        if ($pnlGpuBody -and $pnlGpuBody.ClientSize.Width -gt 0) {
-            $gpuW      = $pnlGpuBody.ClientSize.Width
-            $vmListW   = [Math]::Min(360, [int]($gpuW * 0.37))
-            $grpVMs.Width = $vmListW
-            $vmPanel.Width = [Math]::Max(180, $vmListW - 24)
-
-            $gpuRightX = $grpVMs.Right + 12
-            $gpuRightW = [Math]::Max(380, $gpuW - $gpuRightX - 12)
-            foreach ($gpuCtrl in @($grpGPUSettings, $grpGPUOpts)) {
-                $gpuCtrl.Location = New-Object System.Drawing.Point($gpuRightX, $gpuCtrl.Top)
-                $gpuCtrl.Width    = $gpuRightW
-            }
-            $ctrlGPU["GpuSelector"].Width = [Math]::Max(180, $grpGPUSettings.Width - 70)
-            $ctrlGPU["GpuAllocSlider"].Width = [Math]::Max(120, $grpGPUSettings.Width - 200)
-            $allocLabelX = [Math]::Min($ctrlGPU["GpuAllocSlider"].Right + 8, $grpGPUSettings.Width - 48)
-            $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point([Math]::Max(8, $allocLabelX), $ctrlGPU["GpuAllocLabel"].Top)
-
-            $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX, 388)
-            if ($ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($gpuRightX, 440) }
-            if ($ctrlGPU["GpuStatus"])     { $ctrlGPU["GpuStatus"].Location     = New-Object System.Drawing.Point($gpuRightX, 470) }
-        }
-
-        # Adapt Env panel
-        if ($pnlEnvBody -and $pnlEnvBody.ClientSize.Width -gt 0) {
-            $envW = $pnlEnvBody.ClientSize.Width
-            $sysW = [Math]::Min(520, [int]($envW * 0.56))
-            $grpSysInfo.Width = $sysW
-            $grpGpuInfo.Location = New-Object System.Drawing.Point(($grpSysInfo.Right + 10), 12)
-            $grpGpuInfo.Width    = [Math]::Max(280, $envW - $grpSysInfo.Right - 24)
-            $grpSoft.Location    = New-Object System.Drawing.Point(12, ($grpSysInfo.Bottom + 12))
-            $grpSoft.Width       = [Math]::Max(600, $envW - 24)
-            $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(200, $grpSoft.Width - 220)
-            $btnBrowseGoldenEnv.Location = New-Object System.Drawing.Point(
-                [Math]::Max(320, $ctrlCreate["GoldenParentVHD"].Right + 8), $btnBrowseGoldenEnv.Top)
-        }
-
+        Update-TabLayouts -RootForm $RootForm
     } catch {
         Write-UiWarning "Layout adjustment warning: $($_.Exception.Message)"
     } finally {
@@ -4011,21 +3647,283 @@ function Update-MainLayout {
     }
 }
 
-# Keep Update-TabLayouts as a no-op shim (called from nothing new but kept for safety)
 function Update-TabLayouts {
     param([System.Windows.Forms.Form]$RootForm)
-    Update-MainLayout -RootForm $RootForm
+
+    if (-not $RootForm -or $RootForm.IsDisposed) { return }
+
+    $tabCreate.SuspendLayout()
+    $tabGPU.SuspendLayout()
+    $tabEnv.SuspendLayout()
+    try {
+        $tabPadding = 8
+        $sectionGap = 10
+        $createHeaderBottom = if ($lblCreateHeader) { $lblCreateHeader.Bottom } else { 2 }
+        $createTop = [Math]::Max(18, ($createHeaderBottom + 8))
+        $gpuHeaderBottom = if ($lblGpuHeader) { $lblGpuHeader.Bottom } else { 2 }
+        $gpuTop = [Math]::Max(18, ($gpuHeaderBottom + 8))
+
+        # ----- Create tab -----
+        $createWidth = [Math]::Max(420, $tabCreate.ClientSize.Width - (2 * $tabPadding))
+        $isTwoColumnCreate = ($createWidth -ge 1120)
+
+        if ($isTwoColumnCreate) {
+            $leftWidth = [Math]::Max(500, [Math]::Min(620, [int]($createWidth * 0.50)))
+            $rightWidth = [Math]::Max(430, $createWidth - $leftWidth - $sectionGap)
+            $rightX = $tabPadding + $leftWidth + $sectionGap
+        } else {
+            $leftWidth = $createWidth
+            $rightWidth = $createWidth
+            $rightX = $tabPadding
+        }
+
+        $grpConfig.Location = New-Object System.Drawing.Point($tabPadding, $createTop)
+        $configChildBottom = ($grpConfig.Controls | ForEach-Object { $_.Bottom } | Measure-Object -Maximum).Maximum
+        $grpConfig.Size = New-Object System.Drawing.Size($leftWidth, [Math]::Max(545, ($configChildBottom + 14)))
+
+        $browseRightPad = 12
+        $browseGap = 8
+        $browseX = [Math]::Max(220, ($grpConfig.Width - $btnBrowseVM.Width - $browseRightPad))
+        $btnBrowseVM.Location = New-Object System.Drawing.Point($browseX, $btnBrowseVM.Top)
+        $ctrlCreate["VMLocation"].Width = [Math]::Max(140, ($browseX - $ctrlCreate["VMLocation"].Left - $browseGap))
+        $btnBrowseISO.Location = New-Object System.Drawing.Point($browseX, $btnBrowseISO.Top)
+        $ctrlCreate["ISOPath"].Width = [Math]::Max(140, ($browseX - $ctrlCreate["ISOPath"].Left - $browseGap))
+
+        $bootY = if ($isTwoColumnCreate) { $createTop } else { $grpConfig.Bottom + $sectionGap }
+        $grpBoot.Location = New-Object System.Drawing.Point($rightX, $bootY)
+        $grpBoot.Size = New-Object System.Drawing.Size($rightWidth, 130)
+
+        $grpOpts.Location = New-Object System.Drawing.Point($rightX, $grpBoot.Bottom + $sectionGap)
+        $optsLeftKeys = @("DynamicMem","EnhancedSession","StartVM","StrictLegacyMode")
+        $optsRightKeys = @("AutoCreateSwitch","EnableMetering","EnableAutoLogon")
+        $optsLeftPreferred = (($optsLeftKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
+        $optsRightPreferred = (($optsRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
+        $optsRequiredTwoCol = [Math]::Max(520, ($optsLeftPreferred + $optsRightPreferred + 70))
+        $optsUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge $optsRequiredTwoCol)
+        if ($optsUseTwoCol) {
+            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 184)
+            $optsRightX = [Math]::Max([int]($optsLeftPreferred + 42), [int]($rightWidth * 0.52))
+            $ctrlCreate["DynamicMem"].Location       = New-Object System.Drawing.Point(14, 28)
+            $ctrlCreate["EnhancedSession"].Location  = New-Object System.Drawing.Point(14, 58)
+            $ctrlCreate["StartVM"].Location          = New-Object System.Drawing.Point(14, 88)
+            $ctrlCreate["StrictLegacyMode"].Location = New-Object System.Drawing.Point(14, 118)
+            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($optsRightX, 28)
+            $ctrlCreate["EnableMetering"].Location   = New-Object System.Drawing.Point($optsRightX, 58)
+            $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point($optsRightX, 88)
+            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 136)
+        } else {
+            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 282)
+            $ctrlCreate["DynamicMem"].Location       = New-Object System.Drawing.Point(14, 28)
+            $ctrlCreate["EnhancedSession"].Location  = New-Object System.Drawing.Point(14, 58)
+            $ctrlCreate["StartVM"].Location          = New-Object System.Drawing.Point(14, 88)
+            $ctrlCreate["StrictLegacyMode"].Location = New-Object System.Drawing.Point(14, 118)
+            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point(14, 148)
+            $ctrlCreate["EnableMetering"].Location   = New-Object System.Drawing.Point(14, 178)
+            $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point(14, 208)
+            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 238)
+        }
+        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, ($rightWidth - 24)), 40)
+
+        $grpConfig.Visible = $true
+        $grpBoot.Visible = $true
+        $grpOpts.Visible = $true
+        $grpConfig.BringToFront()
+        $grpBoot.BringToFront()
+        $grpOpts.BringToFront()
+
+        $createBottom = [Math]::Max($grpConfig.Bottom, $grpBoot.Bottom, $grpOpts.Bottom)
+        $fullInfoWidth = [Math]::Max(360, $createWidth - 12)
+        $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point($tabPadding, $createBottom + 10)
+        $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size($fullInfoWidth, 20)
+        $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point($tabPadding, $ctrlCreate["ValidationHint"].Bottom + 4)
+        $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size($fullInfoWidth, 18)
+
+        $statusY = $ctrlCreate["ModeHint"].Bottom + 8
+        $createInnerRight = $tabPadding + $createWidth
+        if ($isTwoColumnCreate) {
+            $statusWidth = [Math]::Max(300, [Math]::Min(($leftWidth - 16), ($createWidth - $btnCreateVM.Width - 40)))
+            $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
+            $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($statusWidth, 34)
+            $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($ctrlCreate["CreateStatus"].Bottom + 2))
+            $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size($statusWidth, 14)
+            $buttonX = $tabPadding + $statusWidth + 18
+            if (($buttonX + $btnCreateVM.Width) -gt $createInnerRight) {
+                $buttonX = [Math]::Max($tabPadding, ($createInnerRight - $btnCreateVM.Width))
+            }
+            $btnCreateVM.Location = New-Object System.Drawing.Point($buttonX, ($statusY - 2))
+        } else {
+            $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
+            $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size([Math]::Max(320, $createWidth - 12), 34)
+            $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($ctrlCreate["CreateStatus"].Bottom + 2))
+            $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size([Math]::Max(320, $createWidth - 12), 14)
+            $btnCreateVM.Location = New-Object System.Drawing.Point($tabPadding + [Math]::Max(0, [int](($createWidth - $btnCreateVM.Width) / 2)), ($ctrlCreate["CreateProgress"].Bottom + 8))
+        }
+
+        $ctrlCreate["ValidationHint"].BringToFront()
+        $ctrlCreate["ModeHint"].BringToFront()
+        $ctrlCreate["CreateStatus"].BringToFront()
+        $ctrlCreate["CreateProgress"].BringToFront()
+        $btnCreateVM.BringToFront()
+
+        $createBottomMost = [Math]::Max(
+            [Math]::Max($ctrlCreate["CreateProgress"].Bottom, $btnCreateVM.Bottom),
+            $ctrlCreate["ModeHint"].Bottom
+        )
+        $tabCreate.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($createBottomMost + 20))
+
+        # ----- GPU tab -----
+        $gpuWidth = [Math]::Max(680, $tabGPU.ClientSize.Width - (2 * $tabPadding))
+        $gpuMinRightWidth = 430
+        $gpuMinLeftWidth = 340
+        $gpuRequiredTwoCol = $gpuMinLeftWidth + $sectionGap + $gpuMinRightWidth + 8
+        $singleGpuColumn = ($gpuWidth -lt $gpuRequiredTwoCol)
+
+        if ($singleGpuColumn) {
+            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, $gpuTop)
+            $grpVMs.Size = New-Object System.Drawing.Size($gpuWidth - 4, 320)
+
+            $grpGPUSettings.Location = New-Object System.Drawing.Point($tabPadding, $grpVMs.Bottom + $sectionGap)
+            $grpGPUSettings.Size = New-Object System.Drawing.Size($gpuWidth - 4, 190)
+
+            $grpGPUOpts.Location = New-Object System.Drawing.Point($tabPadding, $grpGPUSettings.Bottom + $sectionGap)
+            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuWidth - 4, 122)
+
+            $btnUpdateGPU.Location = New-Object System.Drawing.Point($tabPadding + [Math]::Max(0, [int](($gpuWidth - $btnUpdateGPU.Width) / 2)), $grpGPUOpts.Bottom + $sectionGap)
+        } else {
+            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, $gpuTop)
+            $grpVMs.Size = New-Object System.Drawing.Size(360, 400)
+
+            $gpuRightX = $grpVMs.Right + $sectionGap
+            $gpuRightWidth = [Math]::Max(420, $gpuWidth - $grpVMs.Width - $sectionGap - 4)
+            $gpuSettingsTop = [Math]::Max(6, ($gpuTop - 12))
+
+            $grpGPUSettings.Location = New-Object System.Drawing.Point($gpuRightX, $gpuSettingsTop)
+            $grpGPUSettings.Size = New-Object System.Drawing.Size($gpuRightWidth, 190)
+
+            $grpGPUOpts.Location = New-Object System.Drawing.Point($gpuRightX, ($grpGPUSettings.Bottom + $sectionGap))
+            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuRightWidth, 122)
+
+            $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX + [Math]::Max(0, [int](($gpuRightWidth - $btnUpdateGPU.Width) / 2)), ($grpGPUOpts.Bottom + $sectionGap))
+        }
+
+        $vmPanel.Size = New-Object System.Drawing.Size(($grpVMs.Width - 20), [Math]::Max(200, ($grpVMs.Height - 92)))
+        $btnClearVmSearch.Location = New-Object System.Drawing.Point([Math]::Max(200, ($grpVMs.Width - $btnClearVmSearch.Width - 12)), $btnClearVmSearch.Top)
+        $ctrlGPU["VmSearch"].Width = [Math]::Max(120, ($btnClearVmSearch.Left - $ctrlGPU["VmSearch"].Left - 8))
+        $btnSelectAll.Location = New-Object System.Drawing.Point(8, ($vmPanel.Bottom + 8))
+        $btnSelectNone.Location = New-Object System.Drawing.Point(74, ($vmPanel.Bottom + 8))
+        $btnRefreshVMs.Location = New-Object System.Drawing.Point(140, ($vmPanel.Bottom + 8))
+
+        $ctrlGPU["GpuSelector"].Width = [Math]::Max(180, $grpGPUSettings.Width - 115)
+        $sliderWidth = [Math]::Max(120, $grpGPUSettings.Width - 250)
+        $ctrlGPU["GpuAllocSlider"].Width = $sliderWidth
+        $allocLabelX = [Math]::Min(($ctrlGPU["GpuAllocSlider"].Right + 8), ($grpGPUSettings.Width - 52))
+        $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point([Math]::Max(10, $allocLabelX), 158)
+
+        if ($ctrlGPU.ContainsKey("SelectionHint") -and $null -ne $ctrlGPU["SelectionHint"]) {
+            if ($singleGpuColumn) {
+                $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($tabPadding, ($btnUpdateGPU.Bottom + 8))
+                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 34)
+            } else {
+                $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($gpuRightX, ($btnUpdateGPU.Bottom + 8))
+                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 34)
+            }
+        }
+
+        $gpuBottomMost = if ($ctrlGPU.ContainsKey("SelectionHint") -and $null -ne $ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Bottom } else { $btnUpdateGPU.Bottom }
+
+        if ($ctrlGPU.ContainsKey("GpuStatus") -and $null -ne $ctrlGPU["GpuStatus"]) {
+            $hintBottom = $gpuBottomMost
+            if ($singleGpuColumn) {
+                $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point($tabPadding, ($hintBottom + 4))
+                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 34)
+            } else {
+                $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point($gpuRightX, ($hintBottom + 4))
+                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 34)
+            }
+            $gpuBottomMost = $ctrlGPU["GpuStatus"].Bottom
+        }
+
+        $grpVMs.Visible = $true
+        $grpGPUSettings.Visible = $true
+        $grpGPUOpts.Visible = $true
+        $grpVMs.BringToFront()
+        $grpGPUSettings.BringToFront()
+        $grpGPUOpts.BringToFront()
+        if ($btnUpdateGPU) { $btnUpdateGPU.BringToFront() }
+        if ($ctrlGPU.ContainsKey("SelectionHint") -and $ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].BringToFront() }
+        if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) { $ctrlGPU["GpuStatus"].BringToFront() }
+
+        $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
+
+        # ----- Environment tab -----
+        $envWidth = [Math]::Max(680, $tabEnv.ClientSize.Width - (2 * $tabPadding))
+        $envHeaderBottom = if ($lblEnvHeader) { $lblEnvHeader.Bottom } else { 2 }
+        $envTop = [Math]::Max(18, ($envHeaderBottom + 8))
+
+        $grpSysInfo.Location = New-Object System.Drawing.Point($tabPadding, $envTop)
+        $grpSysInfo.Size = New-Object System.Drawing.Size([Math]::Max(580, [int]($envWidth * 0.45)), 200)
+
+        $grpGpuInfo.Location = New-Object System.Drawing.Point(($grpSysInfo.Right + $sectionGap), $envTop)
+        $grpGpuInfo.Size = New-Object System.Drawing.Size([Math]::Max(580, $envWidth - $grpSysInfo.Width - $sectionGap - $tabPadding), 200)
+
+        $grpSysInfo.Visible = $true
+        $grpGpuInfo.Visible = $true
+        $grpSysInfo.BringToFront()
+        $grpGpuInfo.BringToFront()
+
+        $grpSoft.Location = New-Object System.Drawing.Point($tabPadding, [Math]::Max($grpSysInfo.Bottom, $grpGpuInfo.Bottom) + $sectionGap)
+        $grpSoft.Size = New-Object System.Drawing.Size($envWidth - 2 * $tabPadding, 432)
+
+        $ctrlCreate["Parsec"].Location            = New-Object System.Drawing.Point(14, 28)
+        $ctrlCreate["VBCable"].Location           = New-Object System.Drawing.Point(14, 58)
+        $ctrlCreate["USBMMIDD"].Location          = New-Object System.Drawing.Point(14, 88)
+        $ctrlCreate["RDP"].Location               = New-Object System.Drawing.Point(14, 118)
+        $ctrlCreate["Share"].Location             = New-Object System.Drawing.Point(14, 148)
+        $ctrlCreate["PauseUpdate"].Location       = New-Object System.Drawing.Point(14, 178)
+        $ctrlCreate["FullUpdate"].Location        = New-Object System.Drawing.Point(14, 208)
+        $ctrlCreate["NestedVirt"].Location        = New-Object System.Drawing.Point(14, 238)
+        $ctrlCreate["NestedNetFollowup"].Location = New-Object System.Drawing.Point(14, 268)
+        $ctrlCreate["ResetBootOrder"].Location    = New-Object System.Drawing.Point(14, 298)
+        $ctrlCreate["GoldenImage"].Location       = New-Object System.Drawing.Point(14, 328)
+
+        $goldenLabel = $grpSoft.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq 'Parent VHDX:' } | Select-Object -First 1
+        if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 366) }
+        $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(114, 362)
+        $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(214, ($grpSoft.Width - $btnBrowseGolden.Width - 10)), 360)
+
+        $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(170, ($btnBrowseGolden.Left - $ctrlCreate["GoldenParentVHD"].Left - 8))
+
+        $grpSoft.Visible = $true
+        $grpSoft.BringToFront()
+
+        $envBottomMost = [Math]::Max($grpSysInfo.Bottom, $grpGpuInfo.Bottom, $grpSoft.Bottom)
+        $tabEnv.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($envBottomMost + 20))
+    } catch {
+        Write-UiWarning "Tab layout adjustment warning: $($_.Exception.Message)"
+    } finally {
+        $tabCreate.ResumeLayout($true)
+        $tabGPU.ResumeLayout($true)
+        $tabEnv.ResumeLayout($true)
+    }
 }
 
 $script:LayoutTimer = New-Object System.Windows.Forms.Timer
 $script:LayoutTimer.Interval = 100
 $script:LayoutTimer.Add_Tick({
     $script:LayoutTimer.Stop()
-    try { Update-MainLayout -RootForm $form } catch { Write-UiWarning "Deferred layout: $($_.Exception.Message)" }
+    try {
+        Update-MainLayout -RootForm $form
+    } catch {
+        Write-UiWarning "Deferred layout warning: $($_.Exception.Message)"
+    }
 })
 
 $form.Add_Shown({
-    try { Update-MainLayout -RootForm $form } catch { Write-UiWarning "Shown layout: $($_.Exception.Message)" }
+    try {
+        Update-MainLayout -RootForm $form
+    } catch {
+        Write-UiWarning "Shown layout warning: $($_.Exception.Message)"
+    }
 })
 $form.Add_Resize({
     $script:LayoutTimer.Stop()
@@ -4036,9 +3934,7 @@ $form.Add_DpiChanged({
     $script:LayoutTimer.Start()
 })
 
-# ============================================================
-#  BUTTON HOVER HELPERS  (kept for compatibility)
-# ============================================================
+# ---- Modern UI styling helpers ----
 function Set-ButtonHover {
     param(
         [System.Windows.Forms.Button]$Button,
@@ -4046,37 +3942,56 @@ function Set-ButtonHover {
         [System.Drawing.Color]$Hover
     )
     if (-not $Button) { return }
+
+    # Typed copies for closure capture clarity
     [System.Drawing.Color]$normalColor = $Normal
     [System.Drawing.Color]$hoverColor  = $Hover
     if ($null -eq $normalColor -or $normalColor.IsEmpty) { $normalColor = [System.Drawing.SystemColors]::ControlDarkDark }
-    if ($null -eq $hoverColor  -or $hoverColor.IsEmpty)  { $hoverColor  = $normalColor }
+    if ($null -eq $hoverColor -or $hoverColor.IsEmpty) { $hoverColor = $normalColor }
+
     $Button.BackColor = $normalColor
     $Button.FlatStyle = 'Flat'
-    $Button.FlatAppearance.BorderSize             = 0
-    $Button.FlatAppearance.MouseDownBackColor     = $hoverColor
-    $Button.FlatAppearance.MouseOverBackColor     = $hoverColor
+    $Button.FlatAppearance.BorderSize = 1
+    $Button.FlatAppearance.BorderColor = if ($theme.Border) { $theme.Border } else { $normalColor }
+    $Button.FlatAppearance.MouseDownBackColor = $hoverColor
+    $Button.FlatAppearance.MouseOverBackColor = $hoverColor
     $Button.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $Button.Add_MouseEnter({ if (-not $hoverColor.IsEmpty)  { $this.BackColor = $hoverColor  } }.GetNewClosure())
-    $Button.Add_MouseLeave({ if (-not $normalColor.IsEmpty) { $this.BackColor = $normalColor } }.GetNewClosure())
+    $Button.Add_MouseEnter({
+        if (-not $hoverColor.IsEmpty) {
+            $this.BackColor = $hoverColor
+        }
+    }.GetNewClosure())
+    $Button.Add_MouseLeave({
+        if (-not $normalColor.IsEmpty) {
+            $this.BackColor = $normalColor
+        }
+    }.GetNewClosure())
 }
+
+# Pre-create shared font objects for theming to avoid per-control allocation leaks
+$script:ThemeFontGroupBox = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 
 function Set-ModernTheme {
     param([System.Windows.Forms.Control]$Root)
+
     foreach ($control in $Root.Controls) {
         switch ($control.GetType().Name) {
             'GroupBox' {
                 $control.BackColor = $theme.Surface
                 $control.ForeColor = $theme.Text
-                $control.Font      = $script:ThemeFontGroupBox
+                $control.Font = $script:ThemeFontGroupBox
             }
             'Label' {
-                if ($control.BackColor -ne $theme.Surface -and $control.BackColor -ne $theme.Card) {
-                    if ($control.ForeColor -eq [System.Drawing.Color]::White) { $control.ForeColor = $theme.TextHigh }
+                if ($control.ForeColor -eq [System.Drawing.Color]::White) {
+                    $control.ForeColor = $theme.Text
+                }
+                if ($control.ForeColor -eq [System.Drawing.Color]::Silver) {
+                    $control.ForeColor = $theme.Muted
                 }
             }
             'TextBox' {
-                $control.BackColor  = $theme.Input
-                $control.ForeColor  = $theme.Text
+                $control.BackColor = $theme.Input
+                $control.ForeColor = $theme.Text
                 $control.BorderStyle = 'FixedSingle'
             }
             'ComboBox' {
@@ -4089,9 +4004,8 @@ function Set-ModernTheme {
                 $control.ForeColor = $theme.Text
             }
             'Panel' {
-                # Only override if it's still default
-                if ($control.BackColor -eq [System.Drawing.SystemColors]::Control) {
-                    $control.BackColor = $theme.Surface
+                if ($control.BackColor -eq [System.Drawing.Color]::FromArgb(30, 30, 30)) {
+                    $control.BackColor = $theme.Input
                 }
             }
             'CheckBox' {
@@ -4108,108 +4022,108 @@ function Set-ModernTheme {
                 $control.ForeColor = $theme.Accent
             }
         }
-        if ($control.HasChildren) { Set-ModernTheme -Root $control }
+
+        if ($control.HasChildren) {
+            Set-ModernTheme -Root $control
+        }
     }
 }
 
-function Set-UiSpacing {
-    param([System.Windows.Forms.Control]$Root)
-    # No-op placeholder kept for backward compatibility
-}
+# Primary action emphasis
+Set-ButtonHover -Button $btnCreateVM -Normal $theme.Accent -Hover $theme.AccentHover
+Set-ButtonHover -Button $btnUpdateGPU -Normal $theme.Success -Hover $theme.SuccessHover
+Set-ButtonHover -Button $btnExit -Normal $theme.Danger -Hover $theme.DangerHover
+Set-ButtonHover -Button $btnClearLog -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnSaveLog -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnBrowseVM -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnBrowseISO -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnBrowseGolden -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnSelectAll -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnSelectNone -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnRefreshVMs -Normal $theme.Surface -Hover $theme.Border
+Set-ButtonHover -Button $btnClearVmSearch -Normal $theme.Surface -Hover $theme.Border
 
-# Apply theme
 Set-ModernTheme -Root $form
+Set-UiSpacing -Root $form
 
-# Double-buffer key containers to reduce flicker
-function Enable-ControlDoubleBuffer {
-    param([System.Windows.Forms.Control]$Control)
-    try {
-        $prop = $Control.GetType().GetProperty('DoubleBuffered',
-            [System.Reflection.BindingFlags]'NonPublic,Instance')
-        if ($prop) { $prop.SetValue($Control, $true, $null) }
-    } catch {
-        Write-StartupTrace -Message "DoubleBuffer not supported on $($Control.GetType().Name): $($_.Exception.Message)" -Level 'WARN'
-    }
-}
-
+# Reduce redraw flicker in frequently repainted containers.
 Enable-ControlDoubleBuffer -Control $form
-Enable-ControlDoubleBuffer -Control $pnlContent
-Enable-ControlDoubleBuffer -Control $pnlCreateBody
-Enable-ControlDoubleBuffer -Control $pnlGpuBody
-Enable-ControlDoubleBuffer -Control $pnlEnvBody
+Enable-ControlDoubleBuffer -Control $tabControl
 Enable-ControlDoubleBuffer -Control $vmPanel
 Enable-ControlDoubleBuffer -Control $script:LogBox
 
-# Accept/Cancel buttons
+# Keyboard-first behavior: Enter runs primary action for active tab
 $form.AcceptButton = $btnCreateVM
+$tabControl.Add_SelectedIndexChanged({
+    if ($tabControl.SelectedTab -eq $tabCreate) {
+        $form.AcceptButton = $btnCreateVM
+    } elseif ($tabControl.SelectedTab -eq $tabGPU) {
+        $form.AcceptButton = $btnUpdateGPU
+    }
+})
 
-# ============================================================
-#  TOOLTIP SETUP
-# ============================================================
+# Contextual tooltips for intuitiveness
 $toolTip = New-Object System.Windows.Forms.ToolTip
 $toolTip.AutoPopDelay = 8000
 $toolTip.InitialDelay = 300
-$toolTip.ReshowDelay  = 120
-$toolTip.ShowAlways   = $true
+$toolTip.ReshowDelay = 120
+$toolTip.ShowAlways = $true
+$toolTip.SetToolTip($ctrlCreate["VMName"], "Use a short unique VM name starting with a letter (letters, numbers, hyphens only). Cannot end with a hyphen.")
+$toolTip.SetToolTip($ctrlCreate["ISOPath"], "Windows installation ISO for unattended deployment mode.")
+$toolTip.SetToolTip($ctrlCreate["GoldenParentVHD"], "Parent image used when Golden mode is enabled (differencing disk).")
+$toolTip.SetToolTip($ctrlCreate["CheckpointMode"], "Production/ProductionOnly are recommended over Standard for stable rollback.")
+$toolTip.SetToolTip($ctrlCreate["SecureBoot"], "Enables UEFI Secure Boot for the guest. Required for Windows 11, recommended for most modern Windows images.")
+$toolTip.SetToolTip($ctrlCreate["TPM"], "Adds a virtual TPM device to the VM. Required for Windows 11 and helps with BitLocker/attestation scenarios.")
+$toolTip.SetToolTip($ctrlCreate["VHDType"], "Creates a fixed-size virtual disk. Improves predictable I/O and reduces fragmentation at the cost of longer creation time and full upfront space usage.")
+$toolTip.SetToolTip($ctrlCreate["DynamicMem"], "Enable Hyper-V Dynamic Memory ballooning. Startup/min/max memory values below are used to scale RAM usage at runtime.")
+$toolTip.SetToolTip($ctrlCreate["DynamicMemMin"], "Lowest RAM the VM can shrink to when Dynamic Memory is enabled.")
+$toolTip.SetToolTip($ctrlCreate["DynamicMemMax"], "Highest RAM the VM can grow to when Dynamic Memory is enabled.")
+$toolTip.SetToolTip($ctrlCreate["EnhancedSession"], "Enables Enhanced Session integration (clipboard, dynamic display, device redirection) when guest integration services and policy allow it.")
+$toolTip.SetToolTip($ctrlCreate["StartVM"], "Starts the VM automatically after provisioning completes successfully.")
+$toolTip.SetToolTip($ctrlCreate["StrictLegacyMode"], "Forces legacy-safe deployment behavior (non-compact DISM apply + legacy-compatible secure boot template order) for older/custom Windows images.")
+$toolTip.SetToolTip($ctrlCreate["AutoCreateSwitch"], "If selected switch is missing or blank, automatically creates/uses an internal NAT switch so first boot has network routing without manual setup.")
+$toolTip.SetToolTip($ctrlCreate["EnableMetering"], "Enables Hyper-V resource metering and exports an initial usage snapshot (CPU, memory, disk). Useful for capacity tracking.")
+$toolTip.SetToolTip($ctrlCreate["EnableAutoLogon"], "Automatically signs in the configured local account during initial setup logons (LogonCount=999 for unattended multi-reboot setup). Disable for stricter credential posture, especially if the VM will be internet-exposed.")
+$toolTip.SetToolTip($ctrlCreate["Parsec"], "Downloads and installs Parsec silently in SetupComplete (signature-validated). Useful for low-latency remote streaming workflows.")
+$toolTip.SetToolTip($ctrlCreate["VBCable"], "Installs VB-Audio virtual cable to route virtual audio devices in the guest. Good for streaming/remote desktop audio workflows.")
+$toolTip.SetToolTip($ctrlCreate["USBMMIDD"], "Installs a virtual display driver to provide a persistent headless display target in remote sessions.")
+$toolTip.SetToolTip($ctrlCreate["RDP"], "Enables Remote Desktop and firewall rules in the guest after setup.")
+$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a Desktop\share folder inside the guest for the current local user and Administrators. Suitable for dev/lab VMs only - do not use on internet-exposed or production VMs.")
+$toolTip.SetToolTip($ctrlCreate["PauseUpdate"], "Pauses Windows Updates for an extended period after deployment. Useful for preserving known-good driver states.")
+$toolTip.SetToolTip($ctrlCreate["FullUpdate"], "Runs a full Windows Update sequence at first logon using PSWindowsUpdate (can take significant time and may reboot).")
+$toolTip.SetToolTip($ctrlCreate["NestedVirt"], "Exposes virtualization extensions to the guest so it can run Hyper-V/WSL2/other nested hypervisors.")
+$toolTip.SetToolTip($ctrlCreate["NestedNetFollowup"], "Enables MAC spoofing follow-up required by many nested networking/routing scenarios. Requires Nested Virtualization.")
+$toolTip.SetToolTip($ctrlCreate["ResetBootOrder"], "If ISO recovery boot was used, resets firmware boot order back to VHD after first successful start.")
+$toolTip.SetToolTip($ctrlCreate["GoldenImage"], "Creates the VM from a parent golden VHDX using a differencing disk. Faster provisioning, but parent disk must remain available.")
+$toolTip.SetToolTip($ctrlGPU["StartVM"], "Starts selected VMs automatically after GPU adapter update and driver injection.")
+$toolTip.SetToolTip($ctrlGPU["AutoExpand"], "Automatically expands guest VHD if space is insufficient during driver copy to avoid mid-process failures.")
+$toolTip.SetToolTip($ctrlGPU["CopySvcDriver"], "Copies GPU service driver components into the guest HostDriverStore for improved compatibility on some driver stacks.")
+$toolTip.SetToolTip($ctrlGPU["StrictChecks"], "Enforces additional GPU-P safety checks (host readiness, SR-IOV guidance, nested virtualization risk for NVIDIA).")
+$toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"], "Controls GPU partition resource share assigned to the VM.")
+$toolTip.SetToolTip($btnUpdateGPU, "Inject/update GPU-P drivers and optional services into selected VMs.")
+$toolTip.SetToolTip($ctrlGPU["VmSearch"], "Type to quickly filter VMs by name.")
+$toolTip.SetToolTip($btnCreateVM, "Start VM provisioning using the validated settings from the Create tab.")
+$toolTip.SetToolTip($btnClearLog, "Clear the on-screen log output.")
+$toolTip.SetToolTip($btnSaveLog, "Export the current log output to a file.")
+$toolTip.SetToolTip($btnExit, "Close the toolkit and run image mount cleanup.")
 
-$toolTip.SetToolTip($ctrlCreate["VMName"],            "Short unique VM name. Letters, numbers, hyphens only. Cannot start a digit or end with a hyphen.")
-$toolTip.SetToolTip($ctrlCreate["ISOPath"],           "Windows installation ISO for unattended deploy mode.")
-$toolTip.SetToolTip($ctrlCreate["GoldenParentVHD"],   "Parent image used when Golden mode is enabled (differencing disk).")
-$toolTip.SetToolTip($ctrlCreate["CheckpointMode"],    "Production/ProductionOnly recommended over Standard for stable rollback.")
-$toolTip.SetToolTip($ctrlCreate["SecureBoot"],        "Enables UEFI Secure Boot. Required for Windows 11, recommended for modern images.")
-$toolTip.SetToolTip($ctrlCreate["TPM"],               "Adds a virtual TPM. Required for Windows 11.")
-$toolTip.SetToolTip($ctrlCreate["VHDType"],           "Fixed-size VHD: better I/O predictability at cost of upfront disk space.")
-$toolTip.SetToolTip($ctrlCreate["DynamicMem"],        "Enable Hyper-V Dynamic Memory ballooning.")
-$toolTip.SetToolTip($ctrlCreate["DynamicMemMin"],     "Lowest RAM the VM can shrink to with Dynamic Memory.")
-$toolTip.SetToolTip($ctrlCreate["DynamicMemMax"],     "Highest RAM the VM can grow to with Dynamic Memory.")
-$toolTip.SetToolTip($ctrlCreate["EnhancedSession"],   "Enhanced Session: clipboard, dynamic display, device redirection.")
-$toolTip.SetToolTip($ctrlCreate["StartVM"],           "Starts the VM automatically after provisioning.")
-$toolTip.SetToolTip($ctrlCreate["StrictLegacyMode"],  "Forces legacy-safe DISM apply for older/custom Windows images.")
-$toolTip.SetToolTip($ctrlCreate["AutoCreateSwitch"],  "Auto-creates an internal NAT switch when no switch is selected.")
-$toolTip.SetToolTip($ctrlCreate["EnableMetering"],    "Enables Hyper-V resource metering.")
-$toolTip.SetToolTip($ctrlCreate["EnableAutoLogon"],   "Configures automatic logon during initial setup reboots (LogonCount=999).")
-$toolTip.SetToolTip($ctrlCreate["Parsec"],            "Downloads and installs Parsec silently in SetupComplete.")
-$toolTip.SetToolTip($ctrlCreate["VBCable"],           "Installs VB-Audio virtual cable for guest audio routing.")
-$toolTip.SetToolTip($ctrlCreate["USBMMIDD"],          "Installs a virtual display driver for headless remote sessions.")
-$toolTip.SetToolTip($ctrlCreate["RDP"],               "Enables Remote Desktop and firewall rules in the guest.")
-$toolTip.SetToolTip($ctrlCreate["Share"],             "Creates a Desktop\\share folder in the guest. Lab use only.")
-$toolTip.SetToolTip($ctrlCreate["PauseUpdate"],       "Pauses Windows Updates for an extended period.")
-$toolTip.SetToolTip($ctrlCreate["FullUpdate"],        "Runs full Windows Update at first logon via PSWindowsUpdate.")
-$toolTip.SetToolTip($ctrlCreate["NestedVirt"],        "Exposes virtualization extensions for Hyper-V/WSL2 nesting.")
-$toolTip.SetToolTip($ctrlCreate["NestedNetFollowup"], "Enables MAC spoofing for nested networking. Requires Nested Virt.")
-$toolTip.SetToolTip($ctrlCreate["ResetBootOrder"],    "Resets firmware boot order back to VHD after ISO recovery boot.")
-$toolTip.SetToolTip($ctrlCreate["GoldenImage"],       "Creates the VM from a parent Golden VHDX differencing disk.")
-$toolTip.SetToolTip($ctrlGPU["StartVM"],              "Starts selected VMs after GPU adapter update.")
-$toolTip.SetToolTip($ctrlGPU["AutoExpand"],           "Automatically expands guest VHD if insufficient space during driver copy.")
-$toolTip.SetToolTip($ctrlGPU["CopySvcDriver"],        "Copies GPU service driver components to guest HostDriverStore.")
-$toolTip.SetToolTip($ctrlGPU["StrictChecks"],         "Enforces additional GPU-P safety checks.")
-$toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"],       "Controls GPU partition resource share assigned to the VM.")
-$toolTip.SetToolTip($btnUpdateGPU,                    "Inject/update GPU-P drivers into selected VMs.")
-$toolTip.SetToolTip($ctrlGPU["VmSearch"],             "Type to filter VMs by name.")
-$toolTip.SetToolTip($btnCreateVM,                     "Start VM provisioning with validated settings.")
-$toolTip.SetToolTip($btnClearLog,                     "Clear the on-screen log output.")
-$toolTip.SetToolTip($btnSaveLog,                      "Export the current log output to a file.")
-$toolTip.SetToolTip($btnExit,                         "Close the toolkit and run image mount cleanup.")
-$toolTip.SetToolTip($ctrlEnv["HostOS"],               "Operating system running on the host machine.")
-$toolTip.SetToolTip($ctrlEnv["HyperVStatus"],         "Current installation status of the Hyper-V feature.")
-$toolTip.SetToolTip($ctrlEnv["VMMSService"],          "Status of the Hyper-V Virtual Machine Management Service.")
-$toolTip.SetToolTip($ctrlEnv["TotalRAM"],             "Total physical RAM on the host system.")
-$toolTip.SetToolTip($ctrlEnv["ProcessorCount"],       "Number of logical processors available.")
-$toolTip.SetToolTip($ctrlEnv["GpuPEnabled"],          "Whether GPU partitioning is supported on this host build.")
-$toolTip.SetToolTip($ctrlEnv["GpuCount"],             "Number of physical GPUs detected.")
+# Environment tab tooltips
+$toolTip.SetToolTip($ctrlEnv["HostOS"], "Operating system version running on the host machine.")
+$toolTip.SetToolTip($ctrlEnv["HyperVStatus"], "Current status of Hyper-V feature installation.")
+$toolTip.SetToolTip($ctrlEnv["VMMSService"], "Status of the Hyper-V Virtual Machine Management Service.")
+$toolTip.SetToolTip($ctrlEnv["TotalRAM"], "Total physical RAM available on the host system.")
+$toolTip.SetToolTip($ctrlEnv["ProcessorCount"], "Number of logical processors available for VM allocation.")
+$toolTip.SetToolTip($ctrlEnv["GpuPEnabled"], "Whether GPU partitioning is supported on this host build.")
+$toolTip.SetToolTip($ctrlEnv["GpuCount"], "Number of physical GPUs detected in the system.")
 
-# Populate VM checkbox list now that tooltips are registered
+# Refresh VM list once tooltips are available so initial checkbox rows receive them.
 Update-VMList
 
-# ============================================================
-#  KEYBOARD SHORTCUTS
-# ============================================================
 function Get-ActiveFocusedControl {
     param([System.Windows.Forms.Control]$RootControl)
+
     $current = $RootControl
-    while ($current -and $current.ContainsFocus -and
-           $current -is [System.Windows.Forms.ContainerControl] -and
-           $current.ActiveControl) {
+    while ($current -and $current.ContainsFocus -and $current -is [System.Windows.Forms.ContainerControl] -and $current.ActiveControl) {
         $current = $current.ActiveControl
     }
     return $current
@@ -4219,22 +4133,25 @@ $form.Add_KeyDown({
     param($eventSourceControl, $e)
     [void]$eventSourceControl
 
+    # Escape: confirm before closing
     if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
         $result = [System.Windows.Forms.MessageBox]::Show(
             "Are you sure you want to close the toolkit?",
             "Confirm Exit",
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Question)
-        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) { $form.Close() }
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $form.Close()
+        }
         $e.SuppressKeyPress = $true
         return
     }
 
     if (-not $e.Control) { return }
 
+    # Don't intercept shortcuts when a TextBox has focus (allow normal Ctrl+key editing)
     $focused = Get-ActiveFocusedControl -RootControl $form
-    if ($focused -is [System.Windows.Forms.TextBox] -or
-        $focused -is [System.Windows.Forms.TextBoxBase]) { return }
+    if ($focused -is [System.Windows.Forms.TextBox] -or $focused -is [System.Windows.Forms.TextBoxBase]) { return }
 
     if ($e.KeyCode -eq [System.Windows.Forms.Keys]::L) {
         if ($btnClearLog -and $btnClearLog.Enabled) { $btnClearLog.PerformClick() }
@@ -4242,31 +4159,26 @@ $form.Add_KeyDown({
     } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::S) {
         if ($btnSaveLog -and $btnSaveLog.Enabled) { $btnSaveLog.PerformClick() }
         $e.SuppressKeyPress = $true
-    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::F -and $script:ActiveNavIdx -eq 1) {
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::F -and $tabControl.SelectedTab -eq $tabGPU) {
         if ($ctrlGPU.ContainsKey("VmSearch") -and $ctrlGPU["VmSearch"]) {
             $ctrlGPU["VmSearch"].Focus()
             $ctrlGPU["VmSearch"].SelectAll()
         }
         $e.SuppressKeyPress = $true
-    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D1) {
-        $tabControl.SelectedIndex = 0
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D1 -and $e.Control) {
+        $tabControl.SelectedIndex = 0  # Create VM tab
         $e.SuppressKeyPress = $true
-    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D2) {
-        $tabControl.SelectedIndex = 1
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D2 -and $e.Control) {
+        $tabControl.SelectedIndex = 1  # GPU Manager tab
         $e.SuppressKeyPress = $true
-    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D3) {
-        $tabControl.SelectedIndex = 2
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::D3 -and $e.Control) {
+        $tabControl.SelectedIndex = 2  # Environment tab
         $e.SuppressKeyPress = $true
     }
 })
 
-# ============================================================
-#  BRUSH STUBS  (kept so FormClosing disposal code works)
-# ============================================================
-$script:TabBrushSelected = New-Object System.Drawing.SolidBrush($theme.SidebarActive)
-$script:TabBrushNormal   = New-Object System.Drawing.SolidBrush($theme.Sidebar)
-
 #endregion
+
 #region ==================== EVENT HANDLERS ====================
 
 # ---- Browse VM Location ----
@@ -4413,7 +4325,18 @@ $btnBrowseISO.Add_Click({
     }
 })
 
-# NOTE: $btnBrowseGolden.Add_Click is registered inline in the GUI construction section.
+$btnBrowseGolden.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    try {
+        $dlg.Filter = "Virtual Hard Disk|*.vhdx;*.vhd"
+        $dlg.Title  = "Select parent Golden VHDX/VHD"
+        if ($dlg.ShowDialog() -eq 'OK') {
+            $ctrlCreate["GoldenParentVHD"].Text = $dlg.FileName
+        }
+    } finally {
+        $dlg.Dispose()
+    }
+})
 
 function Update-CreateModeUi {
     $isGoldenMode = $false

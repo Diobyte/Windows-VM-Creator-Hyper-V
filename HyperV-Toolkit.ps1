@@ -6708,18 +6708,6 @@ $btnUpdateGPU.Add_Click({
                     continue
                 }
 
-                if (-not $removeOnlyMode -and $gpuVendor -eq 'NVIDIA') {
-                    try {
-                        $vmProcessor = Get-VMProcessor -VMName $VMName -ErrorAction SilentlyContinue
-                        if ($vmProcessor -and $vmProcessor.ExposeVirtualizationExtensions) {
-                            Write-Log "[$VMName] Nested virtualization is enabled. Disabling ExposeVirtualizationExtensions for NVIDIA GPU-P stability." "WARN"
-                            Set-VMProcessor -VMName $VMName -ExposeVirtualizationExtensions $false -ErrorAction Stop
-                        }
-                    } catch {
-                        Write-Log "[$VMName] Could not normalize nested virtualization state: $($_.Exception.Message)" "WARN"
-                    }
-                }
-
                 # Shutdown VM if not already Off (handles Running, Saved, Paused, etc.)
                 if ($vm.State -ne 'Off') {
                     Write-Log "[$VMName] VM state is '$($vm.State)'. Shutting down..."
@@ -6728,6 +6716,30 @@ $btnUpdateGPU.Add_Click({
                         continue
                     }
                     Write-Log "[$VMName] VM stopped." "OK"
+                }
+
+                if (-not $removeOnlyMode) {
+                    # Nested virtualisation is incompatible with GPU-P for ALL GPU vendors.
+                    # Set-VMProcessor requires the VM to be Off, so this must run after shutdown.
+                    try {
+                        $vmProcessor = Get-VMProcessor -VMName $VMName -ErrorAction SilentlyContinue
+                        if ($vmProcessor -and $vmProcessor.ExposeVirtualizationExtensions) {
+                            Write-Log "[$VMName] Nested virtualisation is enabled. Disabling ExposeVirtualizationExtensions for GPU-P stability." "WARN"
+                            Set-VMProcessor -VMName $VMName -ExposeVirtualizationExtensions $false -ErrorAction Stop
+                        }
+                    } catch {
+                        Write-Log "[$VMName] Could not disable nested virtualisation: $($_.Exception.Message)" "WARN"
+                    }
+
+                    # Automatic checkpoints are incompatible with GPU-P: Hyper-V cannot save
+                    # GPU partition state into a checkpoint file, causing the VM to stall or
+                    # corrupt when a background checkpoint is attempted while GPU-P is active.
+                    try {
+                        Set-VM -VMName $VMName -AutomaticCheckpointsEnabled $false -ErrorAction Stop
+                        Write-Log "[$VMName] Automatic checkpoints disabled for GPU-P compatibility." "INFO"
+                    } catch {
+                        Write-Log "[$VMName] Could not disable automatic checkpoints: $($_.Exception.Message)" "WARN"
+                    }
                 }
 
                 # Remove existing GPU-P adapter

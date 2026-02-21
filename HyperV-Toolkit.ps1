@@ -2108,7 +2108,7 @@ function Get-GpuPProviders {
     $gpus = Get-VMHostPartitionableGpu -ErrorAction SilentlyContinue
     if (!$gpus) { return @() }
 
-    $displayDevices = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue
+    $displayDevices = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue
 
     $list = @()
     foreach ($gpu in $gpus) {
@@ -2859,7 +2859,8 @@ $pnlSidebar.Controls.Add($pnlBrand)
 
 $lblSidebarHV = New-Object System.Windows.Forms.Label
 $lblSidebarHV.Text      = "HV"
-$lblSidebarHV.Font      = New-Object System.Drawing.Font("Segoe UI", 22, [System.Drawing.FontStyle]::Bold)
+$script:FontSidebarBrand = New-Object System.Drawing.Font("Segoe UI", 22, [System.Drawing.FontStyle]::Bold)
+$lblSidebarHV.Font      = $script:FontSidebarBrand
 $lblSidebarHV.ForeColor = $theme.SidebarAccent
 $lblSidebarHV.AutoSize  = $false
 $lblSidebarHV.Size      = New-Object System.Drawing.Size(172, 64)
@@ -2940,7 +2941,6 @@ function New-LabeledControl {
     )
     $lbl = New-Object System.Windows.Forms.Label
     $lbl.Text      = $LabelText
-    $lbl.AutoSize  = $true
     $lbl.ForeColor = $theme.Text
     $lbl.Location  = New-Object System.Drawing.Point($X, ($Y + 3))
     $lbl.AutoSize  = $false
@@ -3480,7 +3480,12 @@ $ctrlGPU["GpuSelector"].Add_SelectedIndexChanged({
 
 $script:GpuPList = Get-GpuPProviders
 $script:GpuPList | ForEach-Object { [void]$ctrlGPU["GpuSelector"].Items.Add($_.Friendly) }
-if ($ctrlGPU["GpuSelector"].Items.Count -gt 0) { $ctrlGPU["GpuSelector"].SelectedIndex = 0 }
+if ($ctrlGPU["GpuSelector"].Items.Count -gt 1) {
+    # Default to first actual GPU (index 1) instead of "NONE - Remove GPU Adapter" (index 0)
+    $ctrlGPU["GpuSelector"].SelectedIndex = 1
+} elseif ($ctrlGPU["GpuSelector"].Items.Count -gt 0) {
+    $ctrlGPU["GpuSelector"].SelectedIndex = 0
+}
 
 if (-not $script:SupportsGpuInstancePath) {
     $lblGpuWarn = New-Object System.Windows.Forms.Label
@@ -6177,7 +6182,7 @@ $form.Add_FormClosing({
     # Dispose cached fonts (moved here so they survive any final paint events)
     foreach ($f in @($script:FontMain, $script:FontTabHeader, $script:FontHeader, $script:FontBoldButton,
                      $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:FontSidebarNav,
-                     $script:FontAppTitle, $script:ThemeFontGroupBox)) {
+                     $script:FontAppTitle, $script:ThemeFontGroupBox, $script:FontSidebarBrand)) {
         if ($f) {
             try {
                 $f.Dispose()

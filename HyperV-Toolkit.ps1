@@ -2412,17 +2412,30 @@ function Update-TabLayouts {
 
         # ----- Create tab -----
         $createWidth = [Math]::Max(700, $tabCreate.ClientSize.Width - (2 * $tabPadding))
-        $dpiScale = 1.0
-        try {
-            if ($RootForm.DeviceDpi -gt 96) {
-                $dpiScale = [Math]::Min(1.4, ([double]$RootForm.DeviceDpi / 96.0))
-            }
-        } catch { }
-        $twoColMinWidth = [int](1120 * $dpiScale)
-        $singleCreateColumn = ($createWidth -lt $twoColMinWidth)
 
-        $leftWidth = if ($singleCreateColumn) { $createWidth - 4 } else { [Math]::Max(500, [int]($createWidth * 0.50)) }
-        $rightWidth = if ($singleCreateColumn) { $createWidth - 4 } else { [Math]::Max(430, $createWidth - $leftWidth - $sectionGap - 4) }
+        $checkboxKeysForSizing = @(
+            'DynamicMem','EnhancedSession','StartVM','StrictLegacyMode','AutoCreateSwitch','EnableMetering','EnableAutoLogon',
+            'Parsec','VBCable','USBMMIDD','RDP','Share','PauseUpdate','FullUpdate','NestedVirt','NestedNetFollowup','ResetBootOrder','GoldenImage'
+        )
+        $maxCheckboxPreferredWidth = 0
+        foreach ($checkboxKey in $checkboxKeysForSizing) {
+            if ($ctrlCreate.ContainsKey($checkboxKey) -and $ctrlCreate[$checkboxKey]) {
+                $maxCheckboxPreferredWidth = [Math]::Max($maxCheckboxPreferredWidth, $ctrlCreate[$checkboxKey].PreferredSize.Width)
+            }
+        }
+
+        $minLeftColumnWidth = 520
+        $minRightColumnWidth = [Math]::Max(460, ($maxCheckboxPreferredWidth + 150))
+        $canUseTwoMainColumns = ($createWidth -ge ($minLeftColumnWidth + $sectionGap + $minRightColumnWidth + 4))
+        $singleCreateColumn = (-not $canUseTwoMainColumns)
+
+        if ($singleCreateColumn) {
+            $leftWidth = $createWidth - 4
+            $rightWidth = $createWidth - 4
+        } else {
+            $leftWidth = [Math]::Max($minLeftColumnWidth, [Math]::Min([int]($createWidth * 0.50), ($createWidth - $sectionGap - $minRightColumnWidth - 4)))
+            $rightWidth = [Math]::Max($minRightColumnWidth, ($createWidth - $leftWidth - $sectionGap - 4))
+        }
         $rightX = if ($singleCreateColumn) { $tabPadding } else { $tabPadding + $leftWidth + $sectionGap }
 
         $grpConfig.Location = New-Object System.Drawing.Point($tabPadding, 18)

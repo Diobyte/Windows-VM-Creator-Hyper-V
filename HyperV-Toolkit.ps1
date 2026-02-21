@@ -616,6 +616,10 @@ function Start-VMWithRetry {
         [int]$MaxRetries = 2
     )
 
+    # Skip retries if VM is already running
+    $currentVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if ($currentVm -and $currentVm.State -eq 'Running') { return $true }
+
     for ($i = 1; $i -le $MaxRetries; $i++) {
         try {
             Start-VM -Name $VMName -ErrorAction Stop | Out-Null
@@ -1667,9 +1671,9 @@ function Get-GpuDriverStoreFolders {
                     ForEach-Object { $folders.Add($_) }
             }
         }
-        # GPU-related audio drivers (HDMI/DP audio)
+        # GPU-related audio drivers (HDMI/DP audio) — exclude generic Realtek/Conexant HD Audio
         $audioDevs = Get-PnpDevice -Class MEDIA -Status OK -ErrorAction SilentlyContinue |
-            Where-Object { $_.FriendlyName -match 'NVIDIA|AMD|Radeon|Intel.*Display|High Definition Audio' }
+            Where-Object { $_.FriendlyName -match 'NVIDIA|AMD|Radeon|Intel.*(Display|Graphics)' }
         foreach ($dev in $audioDevs) {
             $infProp = Get-PnpDeviceProperty -InstanceId $dev.InstanceId `
                 -KeyName 'DEVPKEY_Device_DriverInfPath' -ErrorAction SilentlyContinue
@@ -2504,7 +2508,7 @@ function Update-VMList {
         $vmPanel.ResumeLayout($true)
     }
 }
-Update-VMList
+# Defer initial Update-VMList until after tooltips are created (called at line ~3245)
 
 $script:VmFilterTimer = New-Object System.Windows.Forms.Timer
 $script:VmFilterTimer.Interval = 300
@@ -3314,7 +3318,7 @@ $btnBrowseISO.Add_Click({
             $isoVolume = $null
             for ($pollAttempt = 0; $pollAttempt -lt 10; $pollAttempt++) {
                 Start-Sleep -Milliseconds 1000
-                $isoVolume = $script:MountedISO | Get-Volume | Where-Object { $_.DriveLetter }
+                $isoVolume = $script:MountedISO | Get-Volume | Where-Object { $_.DriveLetter } | Select-Object -First 1
                 if ($isoVolume -and $isoVolume.DriveLetter) { break }
             }
             if (-not $isoVolume -or -not $isoVolume.DriveLetter) {
@@ -3377,6 +3381,10 @@ $btnBrowseISO.Add_Click({
 
         } catch {
             Write-Log "Failed to read ISO: $_" "ERROR"
+            # Clear stale edition/WIM data so validation doesn't show old values
+            $script:WimFile = $null
+            $script:EditionMap = @{}
+            $ctrlCreate["Edition"].Items.Clear()
         }
     }
     } finally {
@@ -4687,9 +4695,9 @@ $btnUpdateGPU.Add_Click({
                     }
                 }
 
-                # Shutdown VM if running
-                if ($vm.State -eq 'Running') {
-                    Write-Log "[$VMName] Shutting down..."
+                # Shutdown VM if not already Off (handles Running, Saved, Paused, etc.)
+                if ($vm.State -ne 'Off') {
+                    Write-Log "[$VMName] VM state is '$($vm.State)'. Shutting down..."
                     if (-not (Stop-VMWithTimeout -VMName $VMName -TimeoutSec 60)) {
                         Write-Log "[$VMName] VM did not stop cleanly. Skipping to avoid corruption." "ERROR"
                         continue

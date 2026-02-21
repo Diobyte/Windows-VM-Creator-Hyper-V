@@ -2991,24 +2991,31 @@ function Set-GpuPartitionForVM {
     }
 
     if ($ConservativeProfile) {
-        # Conservative profile: set both Optimal and Min so the hypervisor always
-        # guarantees a non-zero resource floor for the partition. Omitting Min leaves
-        # it at 0, allowing the GPU to allocate nothing to the guest, which causes
-        # driver initialisation failures and guest OS freezes.
+        # Conservative profile: Min/Max/Optimal must all be set together.
+        # If Max is omitted the hypervisor leaves it at the GPU's full hardware
+        # maximum. The guest GPU driver reads Max during early-boot init and tries
+        # to map that entire VRAM/compute aperture via SLAT. Because only Min and
+        # Optimal are backed the mapping requests fault, the hypervisor spinlock
+        # never releases, and the Windows boot animation freezes before login.
+        # Setting Max = Optimal caps the guest's view to exactly what is backed.
         if ($partitionValues.VRAM.Supported) {
             $setParams['MinPartitionVRAM']     = $partitionValues.VRAM.Min
+            $setParams['MaxPartitionVRAM']     = $partitionValues.VRAM.Optimal
             $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal
         }
         if ($partitionValues.Encode.Supported) {
             $setParams['MinPartitionEncode']     = $partitionValues.Encode.Min
+            $setParams['MaxPartitionEncode']     = $partitionValues.Encode.Optimal
             $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal
         }
         if ($partitionValues.Decode.Supported) {
             $setParams['MinPartitionDecode']     = $partitionValues.Decode.Min
+            $setParams['MaxPartitionDecode']     = $partitionValues.Decode.Optimal
             $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal
         }
         if ($partitionValues.Compute.Supported) {
             $setParams['MinPartitionCompute']     = $partitionValues.Compute.Min
+            $setParams['MaxPartitionCompute']     = $partitionValues.Compute.Optimal
             $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal
         }
     } else {

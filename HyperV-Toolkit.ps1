@@ -2774,6 +2774,7 @@ $script:LogBox.WordWrap  = $false
 $script:LogBox.ScrollBars = 'Both'
 $script:LogBox.BorderStyle = 'None'
 $pnlLogFooter.Controls.Add($script:LogBox)
+$pnlLogFooter.Controls.SetChildIndex($script:LogBox, 0)
 
 function New-LogButton {
     param([string]$Text, [int]$Top, [System.Drawing.Color]$Bg, [System.Drawing.Color]$Hover)
@@ -2821,27 +2822,33 @@ $pnlContentRow.Dock      = [System.Windows.Forms.DockStyle]::Fill
 $pnlContentRow.BackColor = $theme.Bg
 $pnlContentRow.Padding   = New-Object System.Windows.Forms.Padding(0)
 $form.Controls.Add($pnlContentRow)
-
-# ---- SIDEBAR ----
-$pnlSidebar = New-Object System.Windows.Forms.Panel
-$pnlSidebar.Dock      = [System.Windows.Forms.DockStyle]::Left
-$pnlSidebar.Width     = 172
-$pnlSidebar.BackColor = $theme.Sidebar
-$pnlContentRow.Controls.Add($pnlSidebar)
-
-# Sidebar right-edge divider
-$pnlSidebarDiv = New-Object System.Windows.Forms.Panel
-$pnlSidebarDiv.Dock      = [System.Windows.Forms.DockStyle]::Left
-$pnlSidebarDiv.Width     = 1
-$pnlSidebarDiv.BackColor = $theme.Border
-$pnlContentRow.Controls.Add($pnlSidebarDiv)
+# Move Fill control to front of z-order so the dock layout engine processes it
+# LAST (after Top/Bottom edge controls claim their space)
+$form.Controls.SetChildIndex($pnlContentRow, 0)
 
 # ---- CONTENT AREA ----
 $pnlContent = New-Object System.Windows.Forms.Panel
 $pnlContent.Dock      = [System.Windows.Forms.DockStyle]::Fill
 $pnlContent.BackColor = $theme.Bg
 $pnlContent.Padding   = New-Object System.Windows.Forms.Padding(0)
+
+# ---- SIDEBAR ----
+$pnlSidebar = New-Object System.Windows.Forms.Panel
+$pnlSidebar.Dock      = [System.Windows.Forms.DockStyle]::Left
+$pnlSidebar.Width     = 172
+$pnlSidebar.BackColor = $theme.Sidebar
+
+# Sidebar right-edge divider
+$pnlSidebarDiv = New-Object System.Windows.Forms.Panel
+$pnlSidebarDiv.Dock      = [System.Windows.Forms.DockStyle]::Left
+$pnlSidebarDiv.Width     = 1
+$pnlSidebarDiv.BackColor = $theme.Border
+
+# Add in correct z-order for docking: Fill first (index 0, processed last),
+# then edge controls (higher indices, processed first by layout engine)
 $pnlContentRow.Controls.Add($pnlContent)
+$pnlContentRow.Controls.Add($pnlSidebarDiv)
+$pnlContentRow.Controls.Add($pnlSidebar)
 
 # ---- SIDEBAR: Branding block ----
 $pnlBrand = New-Object System.Windows.Forms.Panel

@@ -255,6 +255,7 @@ $script:DetectedBuild       = 0       # e.g. 19045, 22621
 $script:LogBox              = $null   # Set when GUI is built
 $script:IsCreating          = $false  # Re-entrancy guard for VM creation
 $script:IsUpdatingGPU       = $false  # Re-entrancy guard for GPU update
+$script:GpuSelectedVMs      = @{}     # Persist selected VMs across filter/refresh
 
 #endregion
 
@@ -1720,6 +1721,7 @@ $tabCreate             = New-Object System.Windows.Forms.TabPage
 $tabCreate.Text        = "  Create VM  "
 $tabCreate.BackColor   = $theme.Card
 $tabCreate.ForeColor   = $theme.Text
+$tabCreate.AutoScroll  = $true
 $tabControl.TabPages.Add($tabCreate)
 
 $lblCreateHeader = New-Object System.Windows.Forms.Label
@@ -1934,6 +1936,13 @@ foreach ($chk in $chkNames) {
     $ctrlCreate[$chk.Key] = $cb
 }
 
+$ctrlCreate["RoutingHint"] = New-Object System.Windows.Forms.Label
+$ctrlCreate["RoutingHint"].Text = "Routing: Auto-create NAT switch provides fallback networking when no switch is selected."
+$ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size(470, 30)
+$ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 124)
+$ctrlCreate["RoutingHint"].ForeColor = $theme.Muted
+$grpOpts.Controls.Add($ctrlCreate["RoutingHint"])
+
 # GroupBox: Post-Install Software
 $grpSoft           = New-Object System.Windows.Forms.GroupBox
 $grpSoft.Text      = "Post-Install Software && Advanced"
@@ -1981,6 +1990,13 @@ $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 600)
 $ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
 $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
+$ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
+$ctrlCreate["ValidationHint"].Text = "Checks: Name ? | Source ? | Network ? | User ?"
+$ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 16)
+$ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 580)
+$ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
+$tabCreate.Controls.Add($ctrlCreate["ValidationHint"])
+
 # Create VM Button
 $btnCreateVM           = New-Object System.Windows.Forms.Button
 $btnCreateVM.Text      = "Create VM"
@@ -2016,6 +2032,7 @@ $tabGPU             = New-Object System.Windows.Forms.TabPage
 $tabGPU.Text        = "  GPU Manager  "
 $tabGPU.BackColor   = $theme.Card
 $tabGPU.ForeColor   = $theme.Text
+$tabGPU.AutoScroll  = $true
 $tabControl.TabPages.Add($tabGPU)
 
 $lblGpuHeader = New-Object System.Windows.Forms.Label
@@ -2068,6 +2085,12 @@ $grpVMs.Controls.Add($vmPanel)
 $ctrlGPU["VMCheckboxes"] = @()
 
 function Update-VMList {
+    foreach ($existingCb in $ctrlGPU["VMCheckboxes"]) {
+        if ($existingCb -and $existingCb.Text) {
+            $script:GpuSelectedVMs[$existingCb.Text] = [bool]$existingCb.Checked
+        }
+    }
+
     $vmPanel.Controls.Clear()
     $checkboxes = @()
     $filterText = ""
@@ -2085,6 +2108,17 @@ function Update-VMList {
         $cb.AutoSize = $true
         $cb.Location = New-Object System.Drawing.Point(8, $y)
         $cb.ForeColor = [System.Drawing.Color]::White
+        if ($script:GpuSelectedVMs.ContainsKey($vm.Name)) {
+            $cb.Checked = [bool]$script:GpuSelectedVMs[$vm.Name]
+        }
+        $cb.Add_CheckedChanged({
+            if ($this -and $this.Text) {
+                $script:GpuSelectedVMs[$this.Text] = [bool]$this.Checked
+            }
+        })
+        if ($toolTip) {
+            $toolTip.SetToolTip($cb, "Select this VM for GPU driver/adapter update. Selection is preserved while filtering and refreshing.")
+        }
         $vmPanel.Controls.Add($cb)
         $checkboxes += $cb
         $y += 26
@@ -2268,7 +2302,8 @@ $script:LogBox.ReadOnly  = $true
 $script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(17, 19, 24)
 $script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(166, 243, 160)
 $script:LogBox.Font      = New-Object System.Drawing.Font("Consolas", 9.5)
-$script:LogBox.WordWrap  = $true
+$script:LogBox.WordWrap  = $false
+$script:LogBox.ScrollBars = 'Both'
 $script:LogBox.BorderStyle = 'FixedSingle'
 $form.Controls.Add($script:LogBox)
 
@@ -2347,8 +2382,113 @@ function Update-MainLayout {
         $btnClearLog.Location = New-Object System.Drawing.Point($buttonX, $logY)
         $btnSaveLog.Location = New-Object System.Drawing.Point($buttonX, ($logY + $buttonStackGap))
         $btnExit.Location = New-Object System.Drawing.Point($buttonX, ($logY + 2 * $buttonStackGap))
+
+        Update-TabLayouts -RootForm $RootForm
     } catch {
         Write-Output "Layout adjustment warning: $($_.Exception.Message)"
+    }
+}
+
+function Update-TabLayouts {
+    param([System.Windows.Forms.Form]$RootForm)
+
+    if (-not $RootForm -or $RootForm.IsDisposed) { return }
+
+    try {
+        $tabPadding = 8
+        $sectionGap = 10
+
+        # ----- Create tab -----
+        $createWidth = [Math]::Max(700, $tabCreate.ClientSize.Width - (2 * $tabPadding))
+        $singleCreateColumn = ($createWidth -lt 1120)
+
+        $leftWidth = if ($singleCreateColumn) { $createWidth - 4 } else { [Math]::Max(500, [int]($createWidth * 0.50)) }
+        $rightWidth = if ($singleCreateColumn) { $createWidth - 4 } else { [Math]::Max(430, $createWidth - $leftWidth - $sectionGap - 4) }
+        $rightX = if ($singleCreateColumn) { $tabPadding } else { $tabPadding + $leftWidth + $sectionGap }
+
+        $grpConfig.Location = New-Object System.Drawing.Point($tabPadding, 18)
+        $grpConfig.Size = New-Object System.Drawing.Size($leftWidth, $grpConfig.Height)
+
+        if ($singleCreateColumn) {
+            $grpBoot.Location = New-Object System.Drawing.Point($rightX, $grpConfig.Bottom + $sectionGap)
+        } else {
+            $grpBoot.Location = New-Object System.Drawing.Point($rightX, 18)
+        }
+        $grpBoot.Size = New-Object System.Drawing.Size($rightWidth, 124)
+
+        $grpOpts.Location = New-Object System.Drawing.Point($rightX, $grpBoot.Bottom + $sectionGap)
+        $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 165)
+
+        $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
+        $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 270)
+
+        $rightColumnX = [Math]::Max(220, [int]($rightWidth * 0.55))
+        $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
+        $ctrlCreate["EnableMetering"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
+        $ctrlCreate["EnableAutoLogon"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
+
+        $ctrlCreate["VBCable"].Location = New-Object System.Drawing.Point($rightColumnX, 28)
+        $ctrlCreate["RDP"].Location = New-Object System.Drawing.Point($rightColumnX, 58)
+        $ctrlCreate["PauseUpdate"].Location = New-Object System.Drawing.Point($rightColumnX, 88)
+        $ctrlCreate["NestedVirt"].Location = New-Object System.Drawing.Point($rightColumnX, 118)
+        $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($rightColumnX, 148)
+
+        $goldenLabelWidth = 95
+        $goldenBrowseWidth = 52
+        $goldenInputWidth = [Math]::Max(170, $rightWidth - ($goldenLabelWidth + $goldenBrowseWidth + 34))
+        $ctrlCreate["GoldenParentVHD"].Width = $goldenInputWidth
+        $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(210, $rightWidth - $goldenBrowseWidth - 10), 210)
+
+        $createBottom = [Math]::Max($grpConfig.Bottom, $grpSoft.Bottom)
+        $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point($tabPadding, $createBottom + 8)
+        $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point($tabPadding, $ctrlCreate["ValidationHint"].Bottom + 4)
+
+        $statusY = $ctrlCreate["ModeHint"].Bottom + 6
+        $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
+        $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($statusY + 20))
+        $btnCreateVM.Location = New-Object System.Drawing.Point($rightX + [Math]::Max(0, [int](($rightWidth - $btnCreateVM.Width) / 2)), ($statusY - 4))
+
+        # ----- GPU tab -----
+        $gpuWidth = [Math]::Max(680, $tabGPU.ClientSize.Width - (2 * $tabPadding))
+        $singleGpuColumn = ($gpuWidth -lt 900)
+
+        if ($singleGpuColumn) {
+            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, 18)
+            $grpVMs.Size = New-Object System.Drawing.Size($gpuWidth - 4, 320)
+
+            $grpGPUSettings.Location = New-Object System.Drawing.Point($tabPadding, $grpVMs.Bottom + $sectionGap)
+            $grpGPUSettings.Size = New-Object System.Drawing.Size($gpuWidth - 4, 190)
+
+            $grpGPUOpts.Location = New-Object System.Drawing.Point($tabPadding, $grpGPUSettings.Bottom + $sectionGap)
+            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuWidth - 4, 95)
+
+            $btnUpdateGPU.Location = New-Object System.Drawing.Point($tabPadding + [Math]::Max(0, [int](($gpuWidth - $btnUpdateGPU.Width) / 2)), $grpGPUOpts.Bottom + $sectionGap)
+        } else {
+            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, 18)
+            $grpVMs.Size = New-Object System.Drawing.Size(360, 400)
+
+            $gpuRightX = $grpVMs.Right + $sectionGap
+            $gpuRightWidth = [Math]::Max(420, $gpuWidth - $grpVMs.Width - $sectionGap - 4)
+
+            $grpGPUSettings.Location = New-Object System.Drawing.Point($gpuRightX, 6)
+            $grpGPUSettings.Size = New-Object System.Drawing.Size($gpuRightWidth, 190)
+
+            $grpGPUOpts.Location = New-Object System.Drawing.Point($gpuRightX, 200)
+            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuRightWidth, 95)
+
+            $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX + [Math]::Max(0, [int](($gpuRightWidth - $btnUpdateGPU.Width) / 2)), 448)
+        }
+
+        $vmPanel.Size = New-Object System.Drawing.Size(($grpVMs.Width - 20), [Math]::Max(200, ($grpVMs.Height - 92)))
+        $btnSelectAll.Location = New-Object System.Drawing.Point(8, ($vmPanel.Bottom + 8))
+        $btnSelectNone.Location = New-Object System.Drawing.Point(74, ($vmPanel.Bottom + 8))
+        $btnRefreshVMs.Location = New-Object System.Drawing.Point(140, ($vmPanel.Bottom + 8))
+
+        $ctrlGPU["GpuSelector"].Width = [Math]::Max(220, $grpGPUSettings.Width - 110)
+        $ctrlGPU["GpuAllocSlider"].Width = [Math]::Max(150, $grpGPUSettings.Width - 250)
+        $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point(($ctrlGPU["GpuAllocSlider"].Right + 8), 158)
+    } catch {
+        Write-Output "Tab layout adjustment warning: $($_.Exception.Message)"
     }
 }
 
@@ -2649,11 +2789,79 @@ function Update-CreateModeUi {
     }
 }
 
+function Update-RoutingHint {
+    if (-not $ctrlCreate.ContainsKey("RoutingHint") -or -not $ctrlCreate["RoutingHint"]) { return }
+
+    $hasSwitch = ($ctrlCreate.ContainsKey("Switch") -and $ctrlCreate["Switch"] -and $ctrlCreate["Switch"].SelectedItem)
+    $autoSwitch = ($ctrlCreate.ContainsKey("AutoCreateSwitch") -and $ctrlCreate["AutoCreateSwitch"] -and $ctrlCreate["AutoCreateSwitch"].Checked)
+    $nestedVirt = ($ctrlCreate.ContainsKey("NestedVirt") -and $ctrlCreate["NestedVirt"] -and $ctrlCreate["NestedVirt"].Checked)
+    $nestedNet  = ($ctrlCreate.ContainsKey("NestedNetFollowup") -and $ctrlCreate["NestedNetFollowup"] -and $ctrlCreate["NestedNetFollowup"].Checked)
+
+    $networkText = if ($hasSwitch) {
+        "Network: Selected switch is set."
+    } elseif ($autoSwitch) {
+        "Network: Auto-create NAT fallback is enabled."
+    } else {
+        "Network: No switch selected and auto-create is off. VM creation may fail."
+    }
+
+    $nestedText = if ($nestedNet -and $nestedVirt) {
+        "Nested routing: Nested virtualization + MAC spoofing follow-up are enabled."
+    } elseif ($nestedVirt) {
+        "Nested routing: Nested virtualization is enabled."
+    } else {
+        "Nested routing: Disabled."
+    }
+
+    $ctrlCreate["RoutingHint"].Text = "$networkText $nestedText"
+    if ($hasSwitch -or $autoSwitch) {
+        $ctrlCreate["RoutingHint"].ForeColor = $theme.Muted
+    } else {
+        $ctrlCreate["RoutingHint"].ForeColor = [System.Drawing.Color]::Gold
+    }
+}
+
+function Update-CreateValidationHint {
+    if (-not $ctrlCreate.ContainsKey("ValidationHint") -or -not $ctrlCreate["ValidationHint"]) { return }
+
+    $vmName = if ($ctrlCreate.ContainsKey("VMName") -and $ctrlCreate["VMName"]) { [string]$ctrlCreate["VMName"].Text } else { "" }
+    $isoPath = if ($ctrlCreate.ContainsKey("ISOPath") -and $ctrlCreate["ISOPath"]) { [string]$ctrlCreate["ISOPath"].Text } else { "" }
+    $userName = if ($ctrlCreate.ContainsKey("Username") -and $ctrlCreate["Username"]) { [string]$ctrlCreate["Username"].Text } else { "" }
+    $switchSelected = ($ctrlCreate.ContainsKey("Switch") -and $ctrlCreate["Switch"] -and $ctrlCreate["Switch"].SelectedItem)
+    $autoSwitch = ($ctrlCreate.ContainsKey("AutoCreateSwitch") -and $ctrlCreate["AutoCreateSwitch"] -and $ctrlCreate["AutoCreateSwitch"].Checked)
+    $useGolden = ($ctrlCreate.ContainsKey("GoldenImage") -and $ctrlCreate["GoldenImage"] -and $ctrlCreate["GoldenImage"].Checked)
+    $goldenPath = if ($ctrlCreate.ContainsKey("GoldenParentVHD") -and $ctrlCreate["GoldenParentVHD"]) { [string]$ctrlCreate["GoldenParentVHD"].Text } else { "" }
+
+    $nameOk = (-not [string]::IsNullOrWhiteSpace($vmName)) -and ($vmName -match '^[a-zA-Z0-9_-]+$') -and ($vmName.Length -le 64)
+    $sourceOk = if ($useGolden) {
+        -not [string]::IsNullOrWhiteSpace($goldenPath) -and (Test-Path $goldenPath)
+    } else {
+        -not [string]::IsNullOrWhiteSpace($isoPath) -and (Test-Path $isoPath)
+    }
+    $networkOk = ($switchSelected -or $autoSwitch)
+    $userOk = (-not [string]::IsNullOrWhiteSpace($userName)) -and ($userName -match '^[a-zA-Z0-9]+$') -and ($userName -ne $vmName)
+
+    $tick = [char]0x2713
+    $cross = [char]0x2717
+    $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross})"
+
+    if ($nameOk -and $sourceOk -and $networkOk -and $userOk) {
+        $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::LimeGreen
+    } elseif ($nameOk -or $sourceOk -or $networkOk -or $userOk) {
+        $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::Gold
+    } else {
+        $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
+    }
+}
+
 $ctrlCreate["GoldenImage"].Add_CheckedChanged({
     Update-CreateModeUi
+    Update-CreateValidationHint
 })
 
 Update-CreateModeUi
+Update-RoutingHint
+Update-CreateValidationHint
 
 # Keep NAT/routing-related checkboxes in a valid state
 $ctrlCreate["AutoCreateSwitch"].Add_CheckedChanged({
@@ -2664,6 +2872,8 @@ $ctrlCreate["AutoCreateSwitch"].Add_CheckedChanged({
             $ctrlCreate["AutoCreateSwitch"].Checked = $true
         }
     }
+    Update-RoutingHint
+    Update-CreateValidationHint
 })
 
 $ctrlCreate["NestedVirt"].Add_CheckedChanged({
@@ -2671,6 +2881,7 @@ $ctrlCreate["NestedVirt"].Add_CheckedChanged({
         $ctrlCreate["NestedNetFollowup"].Checked = $false
         Write-Log "Nested Net follow-up was disabled because Nested Virtualization is off." "INFO"
     }
+    Update-RoutingHint
 })
 
 $ctrlCreate["NestedNetFollowup"].Add_CheckedChanged({
@@ -2678,6 +2889,7 @@ $ctrlCreate["NestedNetFollowup"].Add_CheckedChanged({
         $ctrlCreate["NestedVirt"].Checked = $true
         Write-Log "Nested Virtualization was automatically enabled because Nested Net follow-up requires it." "INFO"
     }
+    Update-RoutingHint
 })
 
 # ---- Update OS info when edition changes ----
@@ -2695,6 +2907,7 @@ $ctrlCreate["Edition"].Add_SelectedIndexChanged({
         $detectedProfile = Resolve-GuestWindowsProfile -DetectedWinVersion $script:DetectedWinVersion -DetectedBuild $script:DetectedBuild
         Set-DetectedGuestDefaults -Controls $ctrlCreate -Profile $detectedProfile
     }
+    Update-CreateValidationHint
 })
 
 $ctrlCreate["Memory"].Add_ValueChanged({
@@ -2707,6 +2920,12 @@ $ctrlCreate["Memory"].Add_ValueChanged({
         $ctrlCreate["DynamicMemMax"].Value = $startup
     }
 })
+
+$ctrlCreate["VMName"].Add_TextChanged({ Update-CreateValidationHint })
+$ctrlCreate["ISOPath"].Add_TextChanged({ Update-CreateValidationHint })
+$ctrlCreate["GoldenParentVHD"].Add_TextChanged({ Update-CreateValidationHint })
+$ctrlCreate["Username"].Add_TextChanged({ Update-CreateValidationHint })
+$ctrlCreate["Switch"].Add_SelectedIndexChanged({ Update-RoutingHint; Update-CreateValidationHint })
 
 # ================================================================
 #  CREATE VM - Main Logic

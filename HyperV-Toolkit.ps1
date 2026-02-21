@@ -1,4 +1,8 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
+
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification='Colored startup/status console output is intentional for interactive desktop use.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification='This is a WinForms application script, not exported cmdlets; ShouldProcess semantics are not user-facing here.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification='Function names are retained for backward compatibility with existing script usage and internal call sites.')]
 
 [CmdletBinding()]
 param(
@@ -345,7 +349,7 @@ $script:DoEventsWarningLogged = $false # One-time guard for DoEvents warning log
 $script:LastLogRefresh      = [DateTime]::MinValue  # Rate-limit LogBox.Refresh()
 $script:LogRefreshIntervalMs = 100                  # Minimum ms between log repaints
 $script:LogMaxLength        = 200000                # Trim log when exceeding ~200KB
-$script:PathCache           = @{}                   # Test-Path cache: path → [result, DateTime]
+$script:PathCache           = @{}                   # Test-Path cache: path â†’ [result, DateTime]
 $script:PathCacheTtlMs      = 5000                  # Cache TTL for Test-PathCached (5s to reduce I/O on slow paths)
 $script:NvidiaDllPatterns   = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
                                 'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
@@ -453,7 +457,7 @@ function Enable-ControlDoubleBuffer {
     }
 }
 
-function Apply-UiSpacing {
+function Set-UiSpacing {
     param([System.Windows.Forms.Control]$Root)
 
     if (-not $Root) { return }
@@ -488,7 +492,7 @@ function Apply-UiSpacing {
         }
 
         if ($control.HasChildren) {
-            Apply-UiSpacing -Root $control
+            Set-UiSpacing -Root $control
         }
     }
 }
@@ -1362,7 +1366,7 @@ function Get-DriverVersionBranch {
     try {
         $segments = $VersionString.Split('.')
         # NVIDIA Windows driver versions use 4 segments: Major.Minor.Branch.Build
-        # e.g. 32.0.15.7275 — the 3rd segment (index 2) is the meaningful branch.
+        # e.g. 32.0.15.7275 â€” the 3rd segment (index 2) is the meaningful branch.
         if ($segments.Count -ge 4) { return [int]$segments[2] }
         if ($segments.Count -ge 1) { return [int]$segments[0] }
         return -1
@@ -2220,7 +2224,7 @@ function Get-GpuDriverStoreFolders {
                     ForEach-Object { $folders.Add($_) }
             }
         }
-        # GPU-related audio drivers (HDMI/DP audio) — exclude generic Realtek/Conexant HD Audio
+        # GPU-related audio drivers (HDMI/DP audio) â€” exclude generic Realtek/Conexant HD Audio
         $audioDevs = Get-PnpDevice -Class MEDIA -Status OK -ErrorAction SilentlyContinue |
             Where-Object { $_.FriendlyName -match 'NVIDIA|AMD|Radeon|Intel.*(Display|Graphics)' }
         foreach ($dev in $audioDevs) {
@@ -2914,7 +2918,7 @@ $btnBrowseGolden.Location = New-Object System.Drawing.Point(438, 210)
 $btnBrowseGolden.FlatStyle = 'Flat'
 $grpSoft.Controls.Add($btnBrowseGolden)
 
-# Bottom controls — added directly to $tabCreate; Update-TabLayouts positions them.
+# Bottom controls - added directly to $tabCreate; Update-TabLayouts positions them.
 
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ModeHint"].Text = "Mode: ISO Deploy - Uses ISO, selected edition, and unattended setup."
@@ -2927,7 +2931,7 @@ $ctrlCreate["ModeHint"].AutoSize = $false
 $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
 $ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
-$ctrlCreate["ValidationHint"].Text = "Checks: Name ? | Source ? | Network ? | User ?"
+$ctrlCreate["ValidationHint"].Text = "Checks: Name pending | Source pending | Network pending | User pending | Password pending"
 $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 20)
 $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 0)
 $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
@@ -3444,98 +3448,49 @@ function Update-TabLayouts {
 
         # ----- Create tab -----
         $createWidth = [Math]::Max(420, $tabCreate.ClientSize.Width - (2 * $tabPadding))
-        $dpiScale = if ($RootForm.DeviceDpi -gt 0) { ($RootForm.DeviceDpi / 96.0) } else { 1.0 }
+        $isTwoColumnCreate = ($createWidth -ge 1120)
 
-        $checkboxKeysForSizing = @(
-            'DynamicMem','EnhancedSession','StartVM','StrictLegacyMode','AutoCreateSwitch','EnableMetering','EnableAutoLogon',
-            'Parsec','VBCable','USBMMIDD','RDP','Share','PauseUpdate','FullUpdate','NestedVirt','NestedNetFollowup','ResetBootOrder','GoldenImage'
-        )
-        $maxCheckboxPreferredWidth = 0
-        foreach ($checkboxKey in $checkboxKeysForSizing) {
-            if ($ctrlCreate.ContainsKey($checkboxKey) -and $ctrlCreate[$checkboxKey]) {
-                $maxCheckboxPreferredWidth = [Math]::Max($maxCheckboxPreferredWidth, $ctrlCreate[$checkboxKey].PreferredSize.Width)
-            }
-        }
-
-        # Adaptive layout (monitor and DPI agnostic):
-        # - Use two columns when both columns can fit safely.
-        # - Fall back to one column when width is too narrow, relying on tab scroll.
-        $bootCheckboxKeys = @('SecureBoot','TPM','VHDType')
-        $bootRequiredWidth = 0
-        foreach ($bootKey in $bootCheckboxKeys) {
-            if ($ctrlCreate.ContainsKey($bootKey) -and $ctrlCreate[$bootKey]) {
-                $bootRequiredWidth = [Math]::Max($bootRequiredWidth, $ctrlCreate[$bootKey].PreferredSize.Width)
-            }
-        }
-
-        $minLeftColumnWidth = [int][Math]::Ceiling(470 * $dpiScale)
-        $minRightColumnWidth = [int][Math]::Ceiling([Math]::Max(
-            [Math]::Max((420 * $dpiScale), ($maxCheckboxPreferredWidth + (140 * $dpiScale))),
-            ($bootRequiredWidth + (38 * $dpiScale))
-        ))
-        $twoColumnSafetyPadding = [int][Math]::Ceiling(36 * $dpiScale)
-        $canUseTwoColumns = ($createWidth -ge ($minLeftColumnWidth + $sectionGap + $minRightColumnWidth + $twoColumnSafetyPadding))
-        if ($dpiScale -ge 1.25) {
-            $canUseTwoColumns = $false
-        }
-        $singleCreateColumn = (-not $canUseTwoColumns)
-
-        if ($singleCreateColumn) {
-            $leftWidth = $createWidth - 4
-            $rightWidth = $createWidth - 4
+        if ($isTwoColumnCreate) {
+            $leftWidth = [Math]::Max(500, [Math]::Min(620, [int]($createWidth * 0.50)))
+            $rightWidth = [Math]::Max(430, $createWidth - $leftWidth - $sectionGap)
+            $rightX = $tabPadding + $leftWidth + $sectionGap
         } else {
-            $leftTargetPercent = 0.50
-            $leftWidth = [Math]::Max($minLeftColumnWidth, [Math]::Min([int]($createWidth * $leftTargetPercent), ($createWidth - $sectionGap - $minRightColumnWidth - 4)))
-            $rightWidth = [Math]::Max($minRightColumnWidth, ($createWidth - $leftWidth - $sectionGap - 4))
+            $leftWidth = $createWidth
+            $rightWidth = $createWidth
+            $rightX = $tabPadding
         }
-        $rightX = if ($singleCreateColumn) { $tabPadding } else { $tabPadding + $leftWidth + $sectionGap }
 
         $grpConfig.Location = New-Object System.Drawing.Point($tabPadding, $createTop)
-        # Calculate required height from child controls to avoid clipping
         $configChildBottom = ($grpConfig.Controls | ForEach-Object { $_.Bottom } | Measure-Object -Maximum).Maximum
-        $configHeight = [Math]::Max(200, $configChildBottom + 14)
-        $grpConfig.Size = New-Object System.Drawing.Size($leftWidth, $configHeight)
+        $grpConfig.Size = New-Object System.Drawing.Size($leftWidth, [Math]::Max(545, ($configChildBottom + 14)))
 
         $browseRightPad = 12
-        $controlGap = 8
+        $browseGap = 8
         $browseX = [Math]::Max(220, ($grpConfig.Width - $btnBrowseVM.Width - $browseRightPad))
         $btnBrowseVM.Location = New-Object System.Drawing.Point($browseX, $btnBrowseVM.Top)
-        $ctrlCreate["VMLocation"].Width = [Math]::Max(130, ($browseX - $ctrlCreate["VMLocation"].Left - $controlGap))
-
+        $ctrlCreate["VMLocation"].Width = [Math]::Max(140, ($browseX - $ctrlCreate["VMLocation"].Left - $browseGap))
         $btnBrowseISO.Location = New-Object System.Drawing.Point($browseX, $btnBrowseISO.Top)
-        $ctrlCreate["ISOPath"].Width = [Math]::Max(130, ($browseX - $ctrlCreate["ISOPath"].Left - $controlGap))
+        $ctrlCreate["ISOPath"].Width = [Math]::Max(140, ($browseX - $ctrlCreate["ISOPath"].Left - $browseGap))
 
-        if ($singleCreateColumn) {
-            $grpBoot.Location = New-Object System.Drawing.Point($rightX, $grpConfig.Bottom + $sectionGap)
-        } else {
-            $grpBoot.Location = New-Object System.Drawing.Point($rightX, $createTop)
-        }
-        $grpBoot.Size = New-Object System.Drawing.Size($rightWidth, 124)
+        $bootY = if ($isTwoColumnCreate) { $createTop } else { $grpConfig.Bottom + $sectionGap }
+        $grpBoot.Location = New-Object System.Drawing.Point($rightX, $bootY)
+        $grpBoot.Size = New-Object System.Drawing.Size($rightWidth, 130)
 
         $grpOpts.Location = New-Object System.Drawing.Point($rightX, $grpBoot.Bottom + $sectionGap)
-
-        $optsLeftKeys = @("DynamicMem","EnhancedSession","StartVM","StrictLegacyMode")
-        $optsRightKeys = @("AutoCreateSwitch","EnableMetering","EnableAutoLogon")
-        $optsLeftRight = ($optsLeftKeys | ForEach-Object { $ctrlCreate[$_].Right } | Measure-Object -Maximum).Maximum
-        $optsRightPreferred = ($optsRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum
-        $optsRightStart = [Math]::Max([int]($rightWidth * 0.50), ($optsLeftRight + 18))
-        $optsCanTwoCol = (($optsRightStart + $optsRightPreferred + 24) -le $rightWidth)
-
-        if ($optsCanTwoCol) {
-            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 178)
-
+        $optsUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge 520)
+        if ($optsUseTwoCol) {
+            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 184)
+            $optsRightX = [Math]::Max(250, [int]($rightWidth * 0.52))
             $ctrlCreate["DynamicMem"].Location       = New-Object System.Drawing.Point(14, 28)
             $ctrlCreate["EnhancedSession"].Location  = New-Object System.Drawing.Point(14, 58)
             $ctrlCreate["StartVM"].Location          = New-Object System.Drawing.Point(14, 88)
             $ctrlCreate["StrictLegacyMode"].Location = New-Object System.Drawing.Point(14, 118)
-
-            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($optsRightStart, 28)
-            $ctrlCreate["EnableMetering"].Location   = New-Object System.Drawing.Point($optsRightStart, 58)
-            $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point($optsRightStart, 88)
-            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 132)
+            $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point($optsRightX, 28)
+            $ctrlCreate["EnableMetering"].Location   = New-Object System.Drawing.Point($optsRightX, 58)
+            $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point($optsRightX, 88)
+            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 136)
         } else {
-            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 278)
-
+            $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 282)
             $ctrlCreate["DynamicMem"].Location       = New-Object System.Drawing.Point(14, 28)
             $ctrlCreate["EnhancedSession"].Location  = New-Object System.Drawing.Point(14, 58)
             $ctrlCreate["StartVM"].Location          = New-Object System.Drawing.Point(14, 88)
@@ -3543,23 +3498,17 @@ function Update-TabLayouts {
             $ctrlCreate["AutoCreateSwitch"].Location = New-Object System.Drawing.Point(14, 148)
             $ctrlCreate["EnableMetering"].Location   = New-Object System.Drawing.Point(14, 178)
             $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point(14, 208)
-            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 236)
+            $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 238)
         }
-        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 42)
+        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, ($rightWidth - 24)), 40)
 
         $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
-
-        $softLeftKeys = @("Parsec","USBMMIDD","Share","FullUpdate","NestedNetFollowup","GoldenImage")
-        $softRightKeys = @("VBCable","RDP","PauseUpdate","NestedVirt","ResetBootOrder")
-        $softLeftRight = ($softLeftKeys | ForEach-Object { $ctrlCreate[$_].Right } | Measure-Object -Maximum).Maximum
-        $softRightPreferred = ($softRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum
-        $softRightStart = [Math]::Max([int]($rightWidth * 0.50), ($softLeftRight + 18))
-        $softCanTwoCol = (($softRightStart + $softRightPreferred + 24) -le $rightWidth)
-
+        $softUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge 520)
         $goldenLabel = $grpSoft.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq 'Parent VHDX:' } | Select-Object -First 1
 
-        if ($softCanTwoCol) {
-            $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 270)
+        if ($softUseTwoCol) {
+            $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 274)
+            $softRightX = [Math]::Max(250, [int]($rightWidth * 0.52))
 
             $ctrlCreate["Parsec"].Location            = New-Object System.Drawing.Point(14, 28)
             $ctrlCreate["USBMMIDD"].Location          = New-Object System.Drawing.Point(14, 58)
@@ -3568,17 +3517,17 @@ function Update-TabLayouts {
             $ctrlCreate["NestedNetFollowup"].Location = New-Object System.Drawing.Point(14, 148)
             $ctrlCreate["GoldenImage"].Location       = New-Object System.Drawing.Point(14, 178)
 
-            $ctrlCreate["VBCable"].Location        = New-Object System.Drawing.Point($softRightStart, 28)
-            $ctrlCreate["RDP"].Location            = New-Object System.Drawing.Point($softRightStart, 58)
-            $ctrlCreate["PauseUpdate"].Location    = New-Object System.Drawing.Point($softRightStart, 88)
-            $ctrlCreate["NestedVirt"].Location     = New-Object System.Drawing.Point($softRightStart, 118)
-            $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($softRightStart, 148)
+            $ctrlCreate["VBCable"].Location        = New-Object System.Drawing.Point($softRightX, 28)
+            $ctrlCreate["RDP"].Location            = New-Object System.Drawing.Point($softRightX, 58)
+            $ctrlCreate["PauseUpdate"].Location    = New-Object System.Drawing.Point($softRightX, 88)
+            $ctrlCreate["NestedVirt"].Location     = New-Object System.Drawing.Point($softRightX, 118)
+            $ctrlCreate["ResetBootOrder"].Location = New-Object System.Drawing.Point($softRightX, 148)
 
-            if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 215) }
-            $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(109, 212)
-            $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(210, $rightWidth - 52 - 10), 210)
+            if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 216) }
+            $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(114, 212)
+            $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(214, ($rightWidth - $btnBrowseGolden.Width - 10)), 210)
         } else {
-            $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 430)
+            $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 432)
 
             $ctrlCreate["Parsec"].Location            = New-Object System.Drawing.Point(14, 28)
             $ctrlCreate["VBCable"].Location           = New-Object System.Drawing.Point(14, 58)
@@ -3592,39 +3541,39 @@ function Update-TabLayouts {
             $ctrlCreate["ResetBootOrder"].Location    = New-Object System.Drawing.Point(14, 298)
             $ctrlCreate["GoldenImage"].Location       = New-Object System.Drawing.Point(14, 328)
 
-            if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 365) }
-            $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(109, 362)
-            $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(210, $rightWidth - 52 - 10), 360)
+            if ($goldenLabel) { $goldenLabel.Location = New-Object System.Drawing.Point(14, 366) }
+            $ctrlCreate["GoldenParentVHD"].Location = New-Object System.Drawing.Point(114, 362)
+            $btnBrowseGolden.Location = New-Object System.Drawing.Point([Math]::Max(214, ($rightWidth - $btnBrowseGolden.Width - 10)), 360)
         }
 
-        $goldenLabelWidth = 95
-        $goldenBrowseWidth = 52
-        $goldenInputWidth = [Math]::Max(170, $rightWidth - ($goldenLabelWidth + $goldenBrowseWidth + 34))
-        $ctrlCreate["GoldenParentVHD"].Width = $goldenInputWidth
+        $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(170, ($btnBrowseGolden.Left - $ctrlCreate["GoldenParentVHD"].Left - 8))
 
         $createBottom = [Math]::Max($grpConfig.Bottom, $grpSoft.Bottom)
-        $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point($tabPadding, $createBottom + 8)
-        $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size([Math]::Max(360, $createWidth - 12), 20)
+        $fullInfoWidth = [Math]::Max(360, $createWidth - 12)
+        $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point($tabPadding, $createBottom + 10)
+        $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size($fullInfoWidth, 20)
         $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point($tabPadding, $ctrlCreate["ValidationHint"].Bottom + 4)
-        $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size([Math]::Max(360, $createWidth - 12), 18)
+        $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size($fullInfoWidth, 18)
 
-        $statusY = $ctrlCreate["ModeHint"].Bottom + 6
-        $btnCreateVM.Location = New-Object System.Drawing.Point($rightX + [Math]::Max(0, [int](($rightWidth - $btnCreateVM.Width) / 2)), ($statusY - 4))
-
-        $createInfoWidth = if ($singleCreateColumn) {
-            [Math]::Max(360, $createWidth - 16)
+        $statusY = $ctrlCreate["ModeHint"].Bottom + 8
+        if ($isTwoColumnCreate) {
+            $statusWidth = [Math]::Max(300, [Math]::Min(($leftWidth - 16), ($createWidth - $btnCreateVM.Width - 36)))
+            $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
+            $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($statusWidth, 34)
+            $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($ctrlCreate["CreateStatus"].Bottom + 2))
+            $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size($statusWidth, 14)
+            $btnCreateVM.Location = New-Object System.Drawing.Point(($tabPadding + $statusWidth + 18), ($statusY - 2))
         } else {
-            [Math]::Max(280, [Math]::Min($leftWidth - 16, $btnCreateVM.Left - $tabPadding - 16))
+            $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
+            $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size([Math]::Max(320, $createWidth - 12), 34)
+            $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($ctrlCreate["CreateStatus"].Bottom + 2))
+            $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size([Math]::Max(320, $createWidth - 12), 14)
+            $btnCreateVM.Location = New-Object System.Drawing.Point($tabPadding + [Math]::Max(0, [int](($createWidth - $btnCreateVM.Width) / 2)), ($ctrlCreate["CreateProgress"].Bottom + 8))
         }
-        $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
-        $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($createInfoWidth, 34)
-        $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($ctrlCreate["CreateStatus"].Bottom + 2))
-        $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size($createInfoWidth, 14)
 
-        # Ensure all create-tab content remains reachable when DPI/font scaling changes.
         $createBottomMost = [Math]::Max(
-            [Math]::Max($ctrlCreate["ModeHint"].Bottom, $btnCreateVM.Bottom),
-            $ctrlCreate["CreateProgress"].Bottom
+            [Math]::Max($ctrlCreate["CreateProgress"].Bottom, $btnCreateVM.Bottom),
+            $ctrlCreate["ModeHint"].Bottom
         )
         $tabCreate.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($createBottomMost + 20))
 
@@ -3843,7 +3792,7 @@ Set-ButtonHover -Button $btnRefreshVMs -Normal $theme.Surface -Hover $theme.Bord
 Set-ButtonHover -Button $btnClearVmSearch -Normal $theme.Surface -Hover $theme.Border
 
 Set-ModernTheme -Root $form
-Apply-UiSpacing -Root $form
+Set-UiSpacing -Root $form
 
 # Reduce redraw flicker in frequently repainted containers.
 Enable-ControlDoubleBuffer -Control $form
@@ -4232,7 +4181,7 @@ function Update-CreateValidationHint {
         $passwordWeak = (-not $hasMinLength -or $complexityScore -lt 3)
     }
 
-    # Golden image mode uses the embedded user profile — skip user/password checks
+    # Golden image mode uses the embedded user profile â€” skip user/password checks
     if ($useGolden) {
         $userOk = $true
         $passwordOk = $true
@@ -5821,7 +5770,7 @@ $btnUpdateGPU.Add_Click({
                                 -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask "igfx*"
                         }
                         default {
-                            # Unknown vendor with SupportsGpuInstancePath — copy all known vendor DLLs
+                            # Unknown vendor with SupportsGpuInstancePath â€” copy all known vendor DLLs
                             Write-Log "[$VMName] Copying all known GPU vendor System32 DLLs (vendor: $gpuVendor)..."
                             $allPatterns = $script:NvidiaDllPatterns + @('amdkmd*','igfx*')
                             foreach ($pat in $allPatterns) {

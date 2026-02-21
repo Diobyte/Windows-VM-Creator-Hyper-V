@@ -2815,9 +2815,10 @@ foreach ($chk in $chkNames) {
 
 $ctrlCreate["RoutingHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["RoutingHint"].Text = "Routing: Auto-create NAT switch provides fallback networking when no switch is selected."
-$ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size(470, 30)
+$ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size(470, 42)
 $ctrlCreate["RoutingHint"].Location = New-Object System.Drawing.Point(14, 124)
 $ctrlCreate["RoutingHint"].ForeColor = $theme.Muted
+$ctrlCreate["RoutingHint"].AutoEllipsis = $true
 $grpOpts.Controls.Add($ctrlCreate["RoutingHint"])
 
 # GroupBox: Post-Install Software
@@ -2863,16 +2864,18 @@ $grpSoft.Controls.Add($btnBrowseGolden)
 
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ModeHint"].Text = "Mode: ISO Deploy - Uses ISO, selected edition, and unattended setup."
-$ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 14)
+$ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 18)
 $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 20)
 $ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
+$ctrlCreate["ModeHint"].AutoEllipsis = $true
 $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
 $ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ValidationHint"].Text = "Checks: Name ? | Source ? | Network ? | User ?"
-$ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 16)
+$ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 20)
 $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 0)
 $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
+$ctrlCreate["ValidationHint"].AutoEllipsis = $true
 $tabCreate.Controls.Add($ctrlCreate["ValidationHint"])
 
 # Create VM Button
@@ -2889,9 +2892,10 @@ $tabCreate.Controls.Add($btnCreateVM)
 # Create VM status + progress
 $ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
-$ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 18)
+$ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 34)
 $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 38)
 $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Cyan
+$ctrlCreate["CreateStatus"].AutoEllipsis = $true
 $tabCreate.Controls.Add($ctrlCreate["CreateStatus"])
 
 $ctrlCreate["CreateProgress"] = New-Object System.Windows.Forms.ProgressBar
@@ -3237,16 +3241,18 @@ $tabGPU.Controls.Add($btnUpdateGPU)
 
 $ctrlGPU["SelectionHint"] = New-Object System.Windows.Forms.Label
 $ctrlGPU["SelectionHint"].Text = "Select at least one VM to enable GPU update."
-$ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size(500, 18)
+$ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size(500, 34)
 $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point(378, 492)
 $ctrlGPU["SelectionHint"].ForeColor = $theme.Muted
+$ctrlGPU["SelectionHint"].AutoEllipsis = $true
 $tabGPU.Controls.Add($ctrlGPU["SelectionHint"])
 
 $ctrlGPU["GpuStatus"] = New-Object System.Windows.Forms.Label
 $ctrlGPU["GpuStatus"].Text = ""
-$ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size(500, 18)
+$ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size(500, 34)
 $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point(378, 514)
 $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
+$ctrlGPU["GpuStatus"].AutoEllipsis = $true
 $tabGPU.Controls.Add($ctrlGPU["GpuStatus"])
 
 # ============================================================
@@ -3302,7 +3308,7 @@ $form.Controls.Add($btnSaveLog)
 
 # Exit Button
 $btnExit           = New-Object System.Windows.Forms.Button
-$btnExit.Text      = "EXIT"
+$btnExit.Text      = "Exit"
 $btnExit.Size      = New-Object System.Drawing.Size(85, 30)
 $btnExit.Location  = New-Object System.Drawing.Point(1220, 790)
 $btnExit.FlatStyle = 'Flat'
@@ -3363,6 +3369,10 @@ function Update-TabLayouts {
     try {
         $tabPadding = 8
         $sectionGap = 10
+        $createHeaderBottom = if ($lblCreateHeader) { $lblCreateHeader.Bottom } else { 2 }
+        $createTop = [Math]::Max(18, ($createHeaderBottom + 8))
+        $gpuHeaderBottom = if ($lblGpuHeader) { $lblGpuHeader.Bottom } else { 2 }
+        $gpuTop = [Math]::Max(18, ($gpuHeaderBottom + 8))
 
         # ----- Create tab -----
         $createWidth = [Math]::Max(420, $tabCreate.ClientSize.Width - (2 * $tabPadding))
@@ -3412,7 +3422,7 @@ function Update-TabLayouts {
         }
         $rightX = if ($singleCreateColumn) { $tabPadding } else { $tabPadding + $leftWidth + $sectionGap }
 
-        $grpConfig.Location = New-Object System.Drawing.Point($tabPadding, 18)
+        $grpConfig.Location = New-Object System.Drawing.Point($tabPadding, $createTop)
         # Calculate required height from child controls to avoid clipping
         $configChildBottom = ($grpConfig.Controls | ForEach-Object { $_.Bottom } | Measure-Object -Maximum).Maximum
         $configHeight = [Math]::Max(200, $configChildBottom + 14)
@@ -3430,7 +3440,7 @@ function Update-TabLayouts {
         if ($singleCreateColumn) {
             $grpBoot.Location = New-Object System.Drawing.Point($rightX, $grpConfig.Bottom + $sectionGap)
         } else {
-            $grpBoot.Location = New-Object System.Drawing.Point($rightX, 18)
+            $grpBoot.Location = New-Object System.Drawing.Point($rightX, $createTop)
         }
         $grpBoot.Size = New-Object System.Drawing.Size($rightWidth, 124)
 
@@ -3467,7 +3477,7 @@ function Update-TabLayouts {
             $ctrlCreate["EnableAutoLogon"].Location  = New-Object System.Drawing.Point(14, 208)
             $ctrlCreate["RoutingHint"].Location      = New-Object System.Drawing.Point(14, 236)
         }
-        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 40)
+        $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, $rightWidth - 20), 42)
 
         $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
 
@@ -3526,7 +3536,9 @@ function Update-TabLayouts {
 
         $createBottom = [Math]::Max($grpConfig.Bottom, $grpSoft.Bottom)
         $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point($tabPadding, $createBottom + 8)
+        $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size([Math]::Max(360, $createWidth - 12), 20)
         $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point($tabPadding, $ctrlCreate["ValidationHint"].Bottom + 4)
+        $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size([Math]::Max(360, $createWidth - 12), 18)
 
         $statusY = $ctrlCreate["ModeHint"].Bottom + 6
         $btnCreateVM.Location = New-Object System.Drawing.Point($rightX + [Math]::Max(0, [int](($rightWidth - $btnCreateVM.Width) / 2)), ($statusY - 4))
@@ -3537,8 +3549,8 @@ function Update-TabLayouts {
             [Math]::Max(280, [Math]::Min($leftWidth - 16, $btnCreateVM.Left - $tabPadding - 16))
         }
         $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
-        $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($createInfoWidth, 18)
-        $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($statusY + 20))
+        $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($createInfoWidth, 34)
+        $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($ctrlCreate["CreateStatus"].Bottom + 2))
         $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size($createInfoWidth, 14)
 
         # Ensure all create-tab content remains reachable when DPI/font scaling changes.
@@ -3553,7 +3565,7 @@ function Update-TabLayouts {
         $singleGpuColumn = ($gpuWidth -lt 900)
 
         if ($singleGpuColumn) {
-            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, 18)
+            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, $gpuTop)
             $grpVMs.Size = New-Object System.Drawing.Size($gpuWidth - 4, 320)
 
             $grpGPUSettings.Location = New-Object System.Drawing.Point($tabPadding, $grpVMs.Bottom + $sectionGap)
@@ -3564,19 +3576,20 @@ function Update-TabLayouts {
 
             $btnUpdateGPU.Location = New-Object System.Drawing.Point($tabPadding + [Math]::Max(0, [int](($gpuWidth - $btnUpdateGPU.Width) / 2)), $grpGPUOpts.Bottom + $sectionGap)
         } else {
-            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, 18)
+            $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, $gpuTop)
             $grpVMs.Size = New-Object System.Drawing.Size(360, 400)
 
             $gpuRightX = $grpVMs.Right + $sectionGap
             $gpuRightWidth = [Math]::Max(420, $gpuWidth - $grpVMs.Width - $sectionGap - 4)
+            $gpuSettingsTop = [Math]::Max(6, ($gpuTop - 12))
 
-            $grpGPUSettings.Location = New-Object System.Drawing.Point($gpuRightX, 6)
+            $grpGPUSettings.Location = New-Object System.Drawing.Point($gpuRightX, $gpuSettingsTop)
             $grpGPUSettings.Size = New-Object System.Drawing.Size($gpuRightWidth, 190)
 
-            $grpGPUOpts.Location = New-Object System.Drawing.Point($gpuRightX, 200)
+            $grpGPUOpts.Location = New-Object System.Drawing.Point($gpuRightX, ($grpGPUSettings.Bottom + $sectionGap))
             $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuRightWidth, 122)
 
-            $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX + [Math]::Max(0, [int](($gpuRightWidth - $btnUpdateGPU.Width) / 2)), 448)
+            $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX + [Math]::Max(0, [int](($gpuRightWidth - $btnUpdateGPU.Width) / 2)), ($grpGPUOpts.Bottom + $sectionGap))
         }
 
         $vmPanel.Size = New-Object System.Drawing.Size(($grpVMs.Width - 20), [Math]::Max(200, ($grpVMs.Height - 92)))
@@ -3595,10 +3608,10 @@ function Update-TabLayouts {
         if ($ctrlGPU.ContainsKey("SelectionHint") -and $null -ne $ctrlGPU["SelectionHint"]) {
             if ($singleGpuColumn) {
                 $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($tabPadding, ($btnUpdateGPU.Bottom + 8))
-                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 18)
+                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 34)
             } else {
                 $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($gpuRightX, ($btnUpdateGPU.Bottom + 8))
-                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 18)
+                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 34)
             }
         }
 
@@ -3608,10 +3621,10 @@ function Update-TabLayouts {
             $hintBottom = $gpuBottomMost
             if ($singleGpuColumn) {
                 $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point($tabPadding, ($hintBottom + 4))
-                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 18)
+                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 34)
             } else {
                 $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point($gpuRightX, ($hintBottom + 4))
-                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 18)
+                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 34)
             }
             $gpuBottomMost = $ctrlGPU["GpuStatus"].Bottom
         }

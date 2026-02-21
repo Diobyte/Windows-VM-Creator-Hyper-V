@@ -4052,10 +4052,6 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         $script:IsCreating = $false
         $tabControl.Enabled  = $true
         [void](Update-CreateValidationHint)
-        if ($ctrlCreate.ContainsKey("CreateStatus") -and $ctrlCreate.ContainsKey("CreateProgress") -and $ctrlCreate["CreateProgress"].Value -lt 100) {
-            $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
-            $ctrlCreate["CreateStatus"].ForeColor = $theme.Muted
-        }
     }
 })
 

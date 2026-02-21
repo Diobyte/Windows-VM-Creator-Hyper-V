@@ -2425,8 +2425,15 @@ function Update-TabLayouts {
         }
 
         $minLeftColumnWidth = 520
-        $minRightColumnWidth = [Math]::Max(460, ($maxCheckboxPreferredWidth + 150))
+        $calculatedRightColumnWidth = [Math]::Max(420, ($maxCheckboxPreferredWidth + 120))
+        $minRightColumnWidth = [Math]::Min(560, $calculatedRightColumnWidth)
         $canUseTwoMainColumns = ($createWidth -ge ($minLeftColumnWidth + $sectionGap + $minRightColumnWidth + 4))
+
+        # Keep Create tab in side-by-side mode at normal desktop widths so
+        # runtime options stay visible and do not drop under VM configuration.
+        if ($createWidth -ge 980) {
+            $canUseTwoMainColumns = $true
+        }
         $singleCreateColumn = (-not $canUseTwoMainColumns)
 
         if ($singleCreateColumn) {

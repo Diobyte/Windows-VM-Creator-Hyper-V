@@ -441,6 +441,58 @@ function Write-UiWarning {
     }
 }
 
+function Enable-ControlDoubleBuffer {
+    param([System.Windows.Forms.Control]$Control)
+
+    if (-not $Control) { return }
+    try {
+        $prop = $Control.GetType().GetProperty('DoubleBuffered', [System.Reflection.BindingFlags]'NonPublic,Instance')
+        if ($prop) { $prop.SetValue($Control, $true, $null) }
+    } catch {
+        Write-Verbose "DoubleBuffer enable skipped for $($Control.GetType().Name): $($PSItem.Exception.Message)"
+    }
+}
+
+function Apply-UiSpacing {
+    param([System.Windows.Forms.Control]$Root)
+
+    if (-not $Root) { return }
+    foreach ($control in $Root.Controls) {
+        switch ($control.GetType().Name) {
+            'GroupBox' {
+                $control.Padding = New-Object System.Windows.Forms.Padding(10, 18, 10, 10)
+                $control.Margin  = New-Object System.Windows.Forms.Padding(8)
+            }
+            'Button' {
+                $control.Margin  = New-Object System.Windows.Forms.Padding(6)
+                $control.Padding = New-Object System.Windows.Forms.Padding(6, 2, 6, 2)
+            }
+            'CheckBox' {
+                $control.Margin  = New-Object System.Windows.Forms.Padding(6, 4, 6, 4)
+            }
+            'RadioButton' {
+                $control.Margin  = New-Object System.Windows.Forms.Padding(6, 4, 6, 4)
+            }
+            'Label' {
+                $control.Margin  = New-Object System.Windows.Forms.Padding(3)
+            }
+            'TextBox' {
+                $control.Margin  = New-Object System.Windows.Forms.Padding(4)
+            }
+            'ComboBox' {
+                $control.Margin  = New-Object System.Windows.Forms.Padding(4)
+            }
+            'NumericUpDown' {
+                $control.Margin  = New-Object System.Windows.Forms.Padding(4)
+            }
+        }
+
+        if ($control.HasChildren) {
+            Apply-UiSpacing -Root $control
+        }
+    }
+}
+
 function Get-ErrorGuidance {
     param([string]$Message)
 
@@ -2580,6 +2632,7 @@ $tabCreate.Text        = "  Create VM  "
 $tabCreate.BackColor   = $theme.Card
 $tabCreate.ForeColor   = $theme.Text
 $tabCreate.AutoScroll  = $true
+$tabCreate.Padding     = New-Object System.Windows.Forms.Padding(8)
 
 # GroupBoxes are added directly to $tabCreate; Update-TabLayouts handles all positioning.
 
@@ -2915,6 +2968,7 @@ $tabGPU.Text        = "  GPU Manager  "
 $tabGPU.BackColor   = $theme.Card
 $tabGPU.ForeColor   = $theme.Text
 $tabGPU.AutoScroll  = $true
+$tabGPU.Padding     = New-Object System.Windows.Forms.Padding(8)
 $tabControl.TabPages.Add($tabGPU)
 
 $lblGpuHeader = New-Object System.Windows.Forms.Label
@@ -3660,6 +3714,10 @@ $form.Add_Resize({
     $script:LayoutTimer.Stop()
     $script:LayoutTimer.Start()
 })
+$form.Add_DpiChanged({
+    $script:LayoutTimer.Stop()
+    $script:LayoutTimer.Start()
+})
 
 # ---- Modern UI styling helpers ----
 function Set-ButtonHover {
@@ -3771,6 +3829,13 @@ Set-ButtonHover -Button $btnRefreshVMs -Normal $theme.Surface -Hover $theme.Bord
 Set-ButtonHover -Button $btnClearVmSearch -Normal $theme.Surface -Hover $theme.Border
 
 Set-ModernTheme -Root $form
+Apply-UiSpacing -Root $form
+
+# Reduce redraw flicker in frequently repainted containers.
+Enable-ControlDoubleBuffer -Control $form
+Enable-ControlDoubleBuffer -Control $tabControl
+Enable-ControlDoubleBuffer -Control $vmPanel
+Enable-ControlDoubleBuffer -Control $script:LogBox
 
 # Keyboard-first behavior: Enter runs primary action for active tab
 $form.AcceptButton = $btnCreateVM

@@ -69,7 +69,8 @@ function Write-StartupTrace {
     try {
         Add-Content -Path $script:StartupLogPath -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] [$Level] $Message" -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch {
-        # Intentionally swallow logging errors during startup
+        # Intentionally suppress startup log I/O failures; avoid recursive logging.
+        [void]$PSItem
     }
 }
 
@@ -84,7 +85,9 @@ try {
             $lines | Set-Content $script:StartupLogPath -Encoding UTF8 -ErrorAction SilentlyContinue
         }
     }
-} catch { <# Swallow rotation errors #> }
+} catch {
+    Write-StartupTrace -Message "Startup log rotation failed: $($_.Exception.Message)" -Level 'WARN'
+}
 
 # Ensure script runs in Windows PowerShell (Desktop) for WinForms/WPF compatibility
 if ($PSVersionTable.PSEdition -ne 'Desktop') {
@@ -205,10 +208,10 @@ function Test-HyperVRunning {
 $feature = $null
 $featureJob = $null
 try {
+    $featureNameForJob = $script:HyperVFeatureName
     $featureJob = Start-Job -ScriptBlock {
-        param($FeatureName)
-        Get-WindowsOptionalFeature -Online -FeatureName $FeatureName -ErrorAction SilentlyContinue
-    } -ArgumentList $script:HyperVFeatureName
+        Get-WindowsOptionalFeature -Online -FeatureName $Using:featureNameForJob -ErrorAction SilentlyContinue
+    }
     if (Wait-Job $featureJob -Timeout 30) {
         $feature = Receive-Job $featureJob -ErrorAction SilentlyContinue
     } else {
@@ -702,6 +705,7 @@ function Get-VMPrimaryVhdPath {
             }
         } catch {
             # Fall through to controller and first-disk heuristics
+            Write-Verbose "Get-VMFirmware failed for '$VMName': $($PSItem.Exception.Message)"
         }
 
         $controllerDisk = $hardDisks | Where-Object {
@@ -930,7 +934,12 @@ function Convert-PlainTextToSecureString {
         return $null
     }
 
-    return (ConvertTo-SecureString -String $Text -AsPlainText -Force)
+    $secure = New-Object System.Security.SecureString
+    foreach ($char in $Text.ToCharArray()) {
+        $secure.AppendChar($char)
+    }
+    $secure.MakeReadOnly()
+    return $secure
 }
 
 function Update-CreateProgress {
@@ -950,7 +959,14 @@ function Update-CreateProgress {
     }
     # Keep UI responsive during long sync operations. Re-entrancy-sensitive actions are
     # already guarded by $script:IsCreating / $script:IsUpdatingGPU flags.
-    try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+    try {
+        [System.Windows.Forms.Application]::DoEvents()
+    } catch {
+        if (-not $script:DoEventsWarningLogged) {
+            $script:DoEventsWarningLogged = $true
+            Write-Log "UI event pump warning: $($_.Exception.Message)" "WARN"
+        }
+    }
 }
 
 function Remove-PartialVmArtifacts {
@@ -1580,14 +1596,14 @@ function Invoke-DismApplyImage {
     foreach ($attempt in $attempts) {
         Write-Log "DISM apply attempt: $($attempt.Label)"
         $dismArgs = $attempt.Args
+        $dismArgsForJob = @($dismArgs)
 
         # Run DISM in a background job with timeout to prevent indefinite hangs.
         # Each output line is written individually so Receive-Job can stream progress.
         $dismJob = Start-Job -ScriptBlock {
-            param($dismArgs)
-            & dism @dismArgs 2>&1 | ForEach-Object { Write-Output $_ }
+            & dism @Using:dismArgsForJob 2>&1 | ForEach-Object { Write-Output $_ }
             Write-Output "__DISM_EXIT__:$LASTEXITCODE"
-        } -ArgumentList (,$dismArgs)
+        }
 
         # Poll the job for incremental progress instead of blocking on Wait-Job
         $timeoutSec = $TimeoutMinutes * 60
@@ -1619,7 +1635,9 @@ function Invoke-DismApplyImage {
                         }
                     }
                 }
-            } catch { }
+            } catch {
+                Write-Log "DISM output polling warning: $($_.Exception.Message)" "WARN"
+            }
         }
 
         if ($dismJob.State -eq 'Running') {
@@ -1665,7 +1683,9 @@ function Invoke-DismApplyImage {
                 }
                 $allOutput.Add($lineStr)
             }
-        } catch { }
+        } catch {
+            Write-Log "DISM output finalization warning: $($_.Exception.Message)" "WARN"
+        }
         Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
 
         $dismOutput = $allOutput
@@ -3813,7 +3833,9 @@ $btnBrowseISO.Add_Click({
             $downloadsDir = [Environment]::GetFolderPath('UserProfile') + '\Downloads'
             if (Test-Path $downloadsDir) { $dlg.InitialDirectory = $downloadsDir }
         }
-    } catch { }
+    } catch {
+        Write-Log "Could not determine initial ISO browse folder: $($_.Exception.Message)" "WARN"
+    }
     try {
     if ($dlg.ShowDialog() -eq 'OK') {
         $ctrlCreate["ISOPath"].Text = $dlg.FileName
@@ -4772,7 +4794,11 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             # Minimize plaintext password lifetime in memory
             $PasswordText = $null
             if ($Password) {
-                try { $Password.Dispose() } catch { }
+                try {
+                    $Password.Dispose()
+                } catch {
+                    Write-Log "SecureString dispose warning: $($_.Exception.Message)" "WARN"
+                }
                 $Password = $null
             }
 
@@ -5026,6 +5052,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 $parentMounted = Mount-VHD -Path $GoldenParentVHD -ReadOnly -Passthru -ErrorAction Stop
                 Register-TrackedMountedImage -ImagePath $GoldenParentVHD
                 $parentDisk = $parentMounted | Get-Disk -ErrorAction SilentlyContinue
+                $goldenHiveLoaded = $false
                 if ($parentDisk) {
                     $parentParts = Get-DataPartitions -DiskNumber $parentDisk.Number
                     foreach ($pp in $parentParts) {
@@ -5035,8 +5062,9 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                             if (Test-Path $regPath) {
                                 try {
                                     reg load "HKU\__golden_detect" $regPath 2>&1 | Out-Null
+                                    if ($LASTEXITCODE -ne 0) { throw "reg load failed with code $LASTEXITCODE" }
+                                    $goldenHiveLoaded = $true
                                     $goldenBuild = (Get-ItemProperty -Path 'Registry::HKU\__golden_detect\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuild' -ErrorAction SilentlyContinue).CurrentBuild
-                                    reg unload "HKU\__golden_detect" 2>&1 | Out-Null
                                     if ($goldenBuild -and [int]$goldenBuild -ge 22000 -and -not $EnableSecureBoot) {
                                         Write-Log "Golden parent appears to be Windows 11 (Build $goldenBuild) but Secure Boot is disabled. Enable it to avoid boot failures." "WARN"
                                     }
@@ -5045,8 +5073,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                                     }
                                     if ($goldenBuild) { Write-Log "Golden parent detected build: $goldenBuild" "INFO" }
                                 } catch {
-                                    # Registry detection is best-effort
-                                    reg unload "HKU\__golden_detect" 2>&1 | Out-Null
+                                    Write-Log "Golden parent build detection warning: $($_.Exception.Message)" "WARN"
+                                } finally {
+                                    if ($goldenHiveLoaded) {
+                                        reg unload "HKU\__golden_detect" 2>&1 | Out-Null
+                                        $goldenHiveLoaded = $false
+                                    }
                                 }
                                 break
                             }
@@ -5057,7 +5089,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 Unregister-TrackedMountedImage -ImagePath $GoldenParentVHD
             } catch {
                 Write-Log "Could not auto-detect golden parent OS (non-critical): $($_.Exception.Message)" "WARN"
-                try { Dismount-VHD -Path $GoldenParentVHD -ErrorAction SilentlyContinue; Unregister-TrackedMountedImage -ImagePath $GoldenParentVHD } catch { }
+                try {
+                    Dismount-VHD -Path $GoldenParentVHD -ErrorAction SilentlyContinue
+                    Unregister-TrackedMountedImage -ImagePath $GoldenParentVHD
+                } catch {
+                    Write-Log "Golden parent cleanup warning: $($_.Exception.Message)" "WARN"
+                }
             }
         }
 
@@ -5742,7 +5779,13 @@ $form.Add_FormClosing({
     # Dispose cached fonts (moved here so they survive any final paint events)
     foreach ($f in @($script:FontMain, $script:FontTabHeader, $script:FontHeader, $script:FontBoldButton,
                      $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:ThemeFontGroupBox)) {
-        if ($f) { try { $f.Dispose() } catch {} }
+        if ($f) {
+            try {
+                $f.Dispose()
+            } catch {
+                Write-StartupTrace -Message "Font dispose warning during shutdown: $($_.Exception.Message)" -Level 'WARN'
+            }
+        }
     }
 })
 

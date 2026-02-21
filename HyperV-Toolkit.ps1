@@ -1329,7 +1329,8 @@ function Get-GpuPartitionValues {
     # Safe UInt64 multiplication: [double] can exceed [UInt64]::MaxValue due to
     # precision loss (e.g. [double][UInt64]::MaxValue rounds up), so clamp before cast.
     $maxU64 = [UInt64]::MaxValue
-    function local:Safe-UInt64Mul([UInt64]$Base, [double]$Factor) {
+    $safeUInt64Mul = {
+        param([UInt64]$Base, [double]$Factor)
         if ($Factor -ge 1.0 -and $Base -eq $maxU64) { return $maxU64 }
         $raw = [math]::Floor([double]$Base * $Factor)
         if ($raw -ge [double]$maxU64) { return $maxU64 }
@@ -1338,10 +1339,10 @@ function Get-GpuPartitionValues {
     }
 
     return @{
-        VRAM    = Safe-UInt64Mul $baseVRAM $factor
-        Encode  = Safe-UInt64Mul $baseEncode $factor
-        Decode  = Safe-UInt64Mul $baseDecode $factor
-        Compute = Safe-UInt64Mul $baseCompute $factor
+        VRAM    = & $safeUInt64Mul $baseVRAM $factor
+        Encode  = & $safeUInt64Mul $baseEncode $factor
+        Decode  = & $safeUInt64Mul $baseDecode $factor
+        Compute = & $safeUInt64Mul $baseCompute $factor
     }
 }
 
@@ -1593,7 +1594,6 @@ function Invoke-DismApplyImage {
         $elapsed = 0
         $pollInterval = 1  # seconds
         $lastPct = -1
-        $timedOut = $false
         $allOutput = [System.Collections.Generic.List[string]]::new()
         $dismExitCode = $null
 
@@ -1623,7 +1623,6 @@ function Invoke-DismApplyImage {
         }
 
         if ($dismJob.State -eq 'Running') {
-            $timedOut = $true
             Write-Log "DISM timed out after $TimeoutMinutes minutes ($($attempt.Label))" "ERROR"
             Stop-Job $dismJob -ErrorAction SilentlyContinue
             Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
@@ -1733,7 +1732,6 @@ function New-UnattendXml {
         catch { $timezone = "UTC" }
     }
 
-    $xmlVMName       = ConvertTo-XmlEscapedValue -Value $VMName
     # Truncate computer name from the raw VM name before XML-escaping to avoid
     # splitting XML entities (e.g. &amp;) that would occur if truncating the escaped form.
     $rawCn = $VMName

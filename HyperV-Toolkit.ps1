@@ -2909,15 +2909,14 @@ function New-NavButton {
 
 $btnNavCreate = New-NavButton "+    Create VM"    64
 $btnNavGPU    = New-NavButton "#    GPU Setup"    120
-$btnNavEnv    = New-NavButton "=    Environment"  176
 
-$script:NavButtons = @($btnNavCreate, $btnNavGPU, $btnNavEnv)
+$script:NavButtons = @($btnNavCreate, $btnNavGPU)
 
 # Sidebar separator and host status indicator
 $pnlSidebarSepLine = New-Object System.Windows.Forms.Label
 $pnlSidebarSepLine.BorderStyle = 'Fixed3D'
 $pnlSidebarSepLine.Size        = New-Object System.Drawing.Size(140, 2)
-$pnlSidebarSepLine.Location    = New-Object System.Drawing.Point(16, 240)
+$pnlSidebarSepLine.Location    = New-Object System.Drawing.Point(16, 184)
 $pnlSidebar.Controls.Add($pnlSidebarSepLine)
 
 $lblSidebarHVState = New-Object System.Windows.Forms.Label
@@ -2927,7 +2926,7 @@ $lblSidebarHVState.ForeColor = $theme.Success
 $lblSidebarHVState.AutoSize  = $false
 $lblSidebarHVState.Size      = New-Object System.Drawing.Size(172, 20)
 $lblSidebarHVState.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-$lblSidebarHVState.Location  = New-Object System.Drawing.Point(0, 250)
+$lblSidebarHVState.Location  = New-Object System.Drawing.Point(0, 194)
 $pnlSidebar.Controls.Add($lblSidebarHVState)
 
 $lblSidebarOs = New-Object System.Windows.Forms.Label
@@ -3620,130 +3619,10 @@ $ctrlGPU["GpuStatus"].ForeColor = $theme.Info
 $ctrlGPU["GpuStatus"].AutoEllipsis = $true
 $pnlGpuBody.Controls.Add($ctrlGPU["GpuStatus"])
 
-# ============================================================
-#  PANEL 3:  ENVIRONMENT
-# ============================================================
-$tabEnv = New-Object System.Windows.Forms.Panel
-$tabEnv.Dock       = [System.Windows.Forms.DockStyle]::Fill
-$tabEnv.BackColor  = $theme.Bg
-$tabEnv.AutoScroll = $true
-$tabEnv.Visible    = $false
-$pnlContent.Controls.Add($tabEnv)
-
-$ctrlEnv = @{}
-
-# ── Panel header ────────────────────────────────────────────
-$pnlEnvHeader = New-Object System.Windows.Forms.Panel
-$pnlEnvHeader.Dock      = [System.Windows.Forms.DockStyle]::Top
-$pnlEnvHeader.Height    = 44
-$pnlEnvHeader.BackColor = $theme.Card
-
-$lblEnvTitle = New-Object System.Windows.Forms.Label
-$lblEnvTitle.Text      = "Environment"
-$lblEnvTitle.Font      = $script:FontTabHeader
-$lblEnvTitle.ForeColor = $theme.TextHigh
-$lblEnvTitle.AutoSize  = $true
-$lblEnvTitle.Location  = New-Object System.Drawing.Point(14, 8)
-$pnlEnvHeader.Controls.Add($lblEnvTitle)
-
-$lblEnvSub = New-Object System.Windows.Forms.Label
-$lblEnvSub.Text      = "System information, Hyper-V status, and post-install software options"
-$lblEnvSub.Font      = $script:FontSmall
-$lblEnvSub.ForeColor = $theme.TextMuted
-$lblEnvSub.AutoSize  = $true
-$lblEnvSub.Location  = New-Object System.Drawing.Point(14, 26)
-$pnlEnvHeader.Controls.Add($lblEnvSub)
-$tabEnv.Controls.Add($pnlEnvHeader)
-
-# ── Scrollable body ─────────────────────────────────────────
-$pnlEnvBody = New-Object System.Windows.Forms.Panel
-$pnlEnvBody.AutoScroll = $true
-$pnlEnvBody.BackColor  = $theme.Bg
-$pnlEnvBody.Location   = New-Object System.Drawing.Point(0, 44)
-$tabEnv.Controls.Add($pnlEnvBody)
-
-# ── System Information ───────────────────────────────────────
-$grpSysInfo = New-ThemedGroupBox "System Information" $pnlEnvBody
-$grpSysInfo.Location = New-Object System.Drawing.Point(12, 12)
-$grpSysInfo.Size     = New-Object System.Drawing.Size(520, 200)
-
-$envRowY = 26
-foreach ($row in @(
-    @{ Key = "HostOS";          Label = "Host OS:";               Value = $script:HostOsName },
-    @{ Key = "HyperVStatus";    Label = "Hyper-V Status:";        Value = "" },
-    @{ Key = "VMMSService";     Label = "VMMS Service:";          Value = "" },
-    @{ Key = "TotalRAM";        Label = "Total RAM (GB):";        Value = "" },
-    @{ Key = "ProcessorCount";  Label = "Logical Processors:";    Value = [string][Environment]::ProcessorCount }
-)) {
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text      = $row.Label
-    $lbl.ForeColor = $theme.Text
-    $lbl.AutoSize  = $false
-    $lbl.Size      = New-Object System.Drawing.Size(150, 22)
-    $lbl.Location  = New-Object System.Drawing.Point(14, $envRowY)
-    $lbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-    $grpSysInfo.Controls.Add($lbl)
-
-    $val = New-Object System.Windows.Forms.Label
-    $val.Text      = $row.Value
-    $val.ForeColor = $theme.Info
-    $val.AutoSize  = $true
-    $val.Location  = New-Object System.Drawing.Point(168, ($envRowY + 2))
-    $grpSysInfo.Controls.Add($val)
-    $ctrlEnv[$row.Key] = $val
-    $envRowY += 34
-}
-
-# Now fill in the ones that need live queries
-try {
-    $hyperVFeature = Get-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -ErrorAction SilentlyContinue
-    $ctrlEnv["HyperVStatus"].Text = if ($hyperVFeature -and $hyperVFeature.State -eq "Enabled") { "Enabled" } else { "Disabled" }
-} catch { $ctrlEnv["HyperVStatus"].Text = "Unknown" }
-
-try {
-    $vmmsService = Get-Service -Name vmms -ErrorAction SilentlyContinue
-    $ctrlEnv["VMMSService"].Text = if ($vmmsService) { [string]$vmmsService.Status } else { "Not found" }
-} catch { $ctrlEnv["VMMSService"].Text = "Unknown" }
-
-$ctrlEnv["TotalRAM"].Text = [string][math]::Round($script:HostComputerSystem.TotalPhysicalMemory / 1GB)
-
-# ── GPU Information ─────────────────────────────────────────
-$grpGpuInfo = New-ThemedGroupBox "GPU Information" $pnlEnvBody
-$grpGpuInfo.Location = New-Object System.Drawing.Point(544, 12)
-$grpGpuInfo.Size     = New-Object System.Drawing.Size(380, 120)
-
-$gpuRowY = 26
-foreach ($row in @(
-    @{ Key = "GpuPEnabled"; Label = "GPU-P Available:"; Value = $(if ($script:SupportsGpuInstancePath) { "Yes" } else { "No" }) },
-    @{ Key = "GpuCount";    Label = "GPU Count:";       Value = "" }
-)) {
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text      = $row.Label
-    $lbl.ForeColor = $theme.Text
-    $lbl.AutoSize  = $false
-    $lbl.Size      = New-Object System.Drawing.Size(130, 22)
-    $lbl.Location  = New-Object System.Drawing.Point(14, $gpuRowY)
-    $lbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-    $grpGpuInfo.Controls.Add($lbl)
-
-    $val = New-Object System.Windows.Forms.Label
-    $val.Text      = $row.Value
-    $val.ForeColor = $theme.Info
-    $val.AutoSize  = $true
-    $val.Location  = New-Object System.Drawing.Point(148, ($gpuRowY + 2))
-    $grpGpuInfo.Controls.Add($val)
-    $ctrlEnv[$row.Key] = $val
-    $gpuRowY += 34
-}
-
-try {
-    $ctrlEnv["GpuCount"].Text = [string](Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Measure-Object).Count
-} catch { $ctrlEnv["GpuCount"].Text = "0" }
-
-# ── Software & Settings ──────────────────────────────────────
-$grpSoft = New-ThemedGroupBox "Software && Settings" $pnlEnvBody
-$grpSoft.Location = New-Object System.Drawing.Point(12, 224)
-$grpSoft.Size     = New-Object System.Drawing.Size(912, 280)
+# ── Software & Settings (on Create VM tab, right column) ─────
+$grpSoft = New-ThemedGroupBox "Software && Settings" $pnlCreateBody
+$grpSoft.Location = New-Object System.Drawing.Point(496, ($grpOpts.Bottom + 10))
+$grpSoft.Size     = New-Object System.Drawing.Size(480, 280)
 $grpSoft.Anchor   = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 
 $softItems = @(
@@ -3781,7 +3660,7 @@ $grpSoft.Controls.Add($goldenLabel)
 
 $ctrlCreate["GoldenParentVHD"] = New-Object System.Windows.Forms.TextBox
 $ctrlCreate["GoldenParentVHD"].Location   = New-Object System.Drawing.Point(118, 214)
-$ctrlCreate["GoldenParentVHD"].Size       = New-Object System.Drawing.Size(680, 24)
+$ctrlCreate["GoldenParentVHD"].Size       = New-Object System.Drawing.Size(260, 24)
 $ctrlCreate["GoldenParentVHD"].BackColor  = $theme.Input
 $ctrlCreate["GoldenParentVHD"].ForeColor  = $theme.Text
 $ctrlCreate["GoldenParentVHD"].BorderStyle = 'FixedSingle'
@@ -3790,7 +3669,7 @@ $grpSoft.Controls.Add($ctrlCreate["GoldenParentVHD"])
 $btnBrowseGoldenEnv = New-Object System.Windows.Forms.Button
 $btnBrowseGoldenEnv.Text      = "Browse"
 $btnBrowseGoldenEnv.Size      = New-Object System.Drawing.Size(64, 24)
-$btnBrowseGoldenEnv.Location  = New-Object System.Drawing.Point(810, 214)
+$btnBrowseGoldenEnv.Location  = New-Object System.Drawing.Point(388, 214)
 $btnBrowseGoldenEnv.FlatStyle = 'Flat'
 $btnBrowseGoldenEnv.BackColor = $theme.Surface
 $btnBrowseGoldenEnv.ForeColor = $theme.Text
@@ -3805,13 +3684,13 @@ $btnBrowseGoldenEnv.Add_Click({
     } finally { $dlg.Dispose() }
 })
 
-# Alias: keep $btnBrowseGolden pointing to the env-tab browse button used by existing handlers
+# Alias: keep $btnBrowseGolden pointing to the browse button used by existing handlers
 $btnBrowseGolden = $btnBrowseGoldenEnv
 
 # ============================================================
 #  NAVIGATION SWITCH LOGIC
 # ============================================================
-$script:NavPanels    = @($tabCreate, $tabGPU, $tabEnv)
+$script:NavPanels    = @($tabCreate, $tabGPU)
 $script:ActiveNavIdx = 0
 
 function Switch-NavPanel {
@@ -3840,7 +3719,6 @@ function Switch-NavPanel {
 
 $btnNavCreate.Add_Click({ Switch-NavPanel -Index 0 })
 $btnNavGPU.Add_Click({    Switch-NavPanel -Index 1 })
-$btnNavEnv.Add_Click({    Switch-NavPanel -Index 2 })
 
 # Activate Create VM by default
 Switch-NavPanel -Index 0
@@ -3890,7 +3768,7 @@ function Update-MainLayout {
         $contentW = $pnlContent.ClientSize.Width
         $contentH = $pnlContent.ClientSize.Height
 
-        foreach ($panel in @($tabCreate, $tabGPU, $tabEnv)) {
+        foreach ($panel in @($tabCreate, $tabGPU)) {
             $panel.Size = New-Object System.Drawing.Size($contentW, $contentH)
         }
 
@@ -3902,14 +3780,10 @@ function Update-MainLayout {
         if ($pnlGpuBody) {
             $pnlGpuBody.Size = New-Object System.Drawing.Size($contentW, [Math]::Max(100, $contentH - 44))
         }
-        # Env body
-        if ($pnlEnvBody) {
-            $pnlEnvBody.Size = New-Object System.Drawing.Size($contentW, [Math]::Max(100, $contentH - 44))
-        }
 
         # Reposition action strip at bottom of create body
         if ($pnlCreateAction -and $pnlCreateBody) {
-            $actionY = [Math]::Max($grpOpts.Bottom, $grpConfig.Bottom) + 14
+            $actionY = [Math]::Max([Math]::Max($grpSoft.Bottom, $grpOpts.Bottom), $grpConfig.Bottom) + 14
             $pnlCreateAction.Location = New-Object System.Drawing.Point(0, $actionY)
             $pnlCreateAction.Width    = [Math]::Max(600, $pnlCreateBody.ClientSize.Width)
 
@@ -3931,6 +3805,11 @@ function Update-MainLayout {
             $grpBoot.Width    = $rightW
             $grpOpts.Location = New-Object System.Drawing.Point($rightX, ($grpBoot.Bottom + 10))
             $grpOpts.Width    = $rightW
+            $grpSoft.Location = New-Object System.Drawing.Point($rightX, ($grpOpts.Bottom + 10))
+            $grpSoft.Width    = $rightW
+            $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(200, $grpSoft.Width - 220)
+            $btnBrowseGoldenEnv.Location = New-Object System.Drawing.Point(
+                [Math]::Max(320, $ctrlCreate["GoldenParentVHD"].Right + 8), $btnBrowseGoldenEnv.Top)
 
             # Resize browse buttons to stay near right edge of grpConfig
             $browseRightX = [Math]::Max(360, $grpConfig.Width - 72)
@@ -3965,20 +3844,6 @@ function Update-MainLayout {
             $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX, 388)
             if ($ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($gpuRightX, 440) }
             if ($ctrlGPU["GpuStatus"])     { $ctrlGPU["GpuStatus"].Location     = New-Object System.Drawing.Point($gpuRightX, 470) }
-        }
-
-        # Adapt Env panel
-        if ($pnlEnvBody -and $pnlEnvBody.ClientSize.Width -gt 0) {
-            $envW = $pnlEnvBody.ClientSize.Width
-            $sysW = [Math]::Min(520, [int]($envW * 0.56))
-            $grpSysInfo.Width = $sysW
-            $grpGpuInfo.Location = New-Object System.Drawing.Point(($grpSysInfo.Right + 10), 12)
-            $grpGpuInfo.Width    = [Math]::Max(280, $envW - $grpSysInfo.Right - 24)
-            $grpSoft.Location    = New-Object System.Drawing.Point(12, ($grpSysInfo.Bottom + 12))
-            $grpSoft.Width       = [Math]::Max(600, $envW - 24)
-            $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(200, $grpSoft.Width - 220)
-            $btnBrowseGoldenEnv.Location = New-Object System.Drawing.Point(
-                [Math]::Max(320, $ctrlCreate["GoldenParentVHD"].Right + 8), $btnBrowseGoldenEnv.Top)
         }
 
     } catch {
@@ -4106,7 +3971,6 @@ Enable-ControlDoubleBuffer -Control $form
 Enable-ControlDoubleBuffer -Control $pnlContent
 Enable-ControlDoubleBuffer -Control $pnlCreateBody
 Enable-ControlDoubleBuffer -Control $pnlGpuBody
-Enable-ControlDoubleBuffer -Control $pnlEnvBody
 Enable-ControlDoubleBuffer -Control $vmPanel
 Enable-ControlDoubleBuffer -Control $script:LogBox
 
@@ -4160,13 +4024,7 @@ $toolTip.SetToolTip($btnCreateVM,                     "Start VM provisioning wit
 $toolTip.SetToolTip($btnClearLog,                     "Clear the on-screen log output.")
 $toolTip.SetToolTip($btnSaveLog,                      "Export the current log output to a file.")
 $toolTip.SetToolTip($btnExit,                         "Close the toolkit and run image mount cleanup.")
-$toolTip.SetToolTip($ctrlEnv["HostOS"],               "Operating system running on the host machine.")
-$toolTip.SetToolTip($ctrlEnv["HyperVStatus"],         "Current installation status of the Hyper-V feature.")
-$toolTip.SetToolTip($ctrlEnv["VMMSService"],          "Status of the Hyper-V Virtual Machine Management Service.")
-$toolTip.SetToolTip($ctrlEnv["TotalRAM"],             "Total physical RAM on the host system.")
-$toolTip.SetToolTip($ctrlEnv["ProcessorCount"],       "Number of logical processors available.")
-$toolTip.SetToolTip($ctrlEnv["GpuPEnabled"],          "Whether GPU partitioning is supported on this host build.")
-$toolTip.SetToolTip($ctrlEnv["GpuCount"],             "Number of physical GPUs detected.")
+
 
 # Populate VM checkbox list now that tooltips are registered
 Update-VMList
@@ -4407,8 +4265,13 @@ function Update-CreateModeUi {
     if ($btnBrowseISO) { $btnBrowseISO.Enabled = -not $isGoldenMode }
     if ($btnBrowseGolden) { $btnBrowseGolden.Enabled = $isGoldenMode }
 
+    # Resolution is irrelevant in golden mode (QRes.exe is not injected)
+    if ($ctrlCreate.ContainsKey('Resolution') -and $ctrlCreate['Resolution']) {
+        $ctrlCreate['Resolution'].Enabled = -not $isGoldenMode
+    }
+
     # Golden mode skips unattend, so disable user-credential and post-install controls
-    $goldenDisableKeys = @('Username','Password','EnableAutoLogon','Parsec','VBCable','USBMMIDD','RDP','Share','PauseUpdate','FullUpdate')
+    $goldenDisableKeys = @('Username','Password','EnableAutoLogon','Parsec','VBCable','USBMMIDD','RDP','Share','PauseUpdate','FullUpdate','StrictLegacyMode')
     foreach ($key in $goldenDisableKeys) {
         if ($ctrlCreate.ContainsKey($key) -and $ctrlCreate[$key]) {
             $ctrlCreate[$key].Enabled = -not $isGoldenMode
@@ -4626,6 +4489,11 @@ $ctrlCreate["AutoCreateSwitch"].Add_CheckedChanged({
 })
 
 $ctrlCreate["DynamicMem"].Add_CheckedChanged({
+    # Hyper-V does not support dynamic memory with nested virtualization
+    if ($ctrlCreate["DynamicMem"].Checked -and $ctrlCreate["NestedVirt"].Checked) {
+        $ctrlCreate["DynamicMem"].Checked = $false
+        Write-Log "Dynamic Memory cannot be enabled while Nested Virtualization is active (Hyper-V limitation)." "WARN"
+    }
     Update-DynamicMemoryUi
 })
 
@@ -4659,6 +4527,11 @@ $ctrlCreate["NestedVirt"].Add_CheckedChanged({
     if (-not $ctrlCreate["NestedVirt"].Checked -and $ctrlCreate["NestedNetFollowup"].Checked) {
         $ctrlCreate["NestedNetFollowup"].Checked = $false
         Write-Log "Nested Net follow-up was disabled because Nested Virtualization is off." "INFO"
+    }
+    # Hyper-V does not support dynamic memory with nested virtualization
+    if ($ctrlCreate["NestedVirt"].Checked -and $ctrlCreate["DynamicMem"].Checked) {
+        $ctrlCreate["DynamicMem"].Checked = $false
+        Write-Log "Dynamic Memory was disabled because Hyper-V does not support it with Nested Virtualization." "WARN"
     }
     Update-RoutingHint
 })
@@ -4938,14 +4811,20 @@ $btnCreateVM.Add_Click({
             $PasswordText = $null   # Clear plaintext immediately
         }
         if ($EnableDynamicMem) {
-            if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
-                throw "Dynamic Memory minimum ($DynamicMemMinGB GB) cannot be greater than maximum ($DynamicMemMaxGB GB)."
-            }
-            if ($DynamicMemMinGB -gt $MemGB) {
-                throw "Dynamic Memory minimum ($DynamicMemMinGB GB) cannot be greater than startup memory ($MemGB GB)."
-            }
-            if ($DynamicMemMaxGB -lt $MemGB) {
-                throw "Dynamic Memory maximum ($DynamicMemMaxGB GB) cannot be less than startup memory ($MemGB GB)."
+            if ($EnableNestedVirt) {
+                Write-Log "Dynamic Memory is incompatible with Nested Virtualization. Disabling dynamic memory." "WARN"
+                $EnableDynamicMem = $false
+                $ctrlCreate["DynamicMem"].Checked = $false
+            } else {
+                if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
+                    throw "Dynamic Memory minimum ($DynamicMemMinGB GB) cannot be greater than maximum ($DynamicMemMaxGB GB)."
+                }
+                if ($DynamicMemMinGB -gt $MemGB) {
+                    throw "Dynamic Memory minimum ($DynamicMemMinGB GB) cannot be greater than startup memory ($MemGB GB)."
+                }
+                if ($DynamicMemMaxGB -lt $MemGB) {
+                    throw "Dynamic Memory maximum ($DynamicMemMaxGB GB) cannot be less than startup memory ($MemGB GB)."
+                }
             }
         }
 

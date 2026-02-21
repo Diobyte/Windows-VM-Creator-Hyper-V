@@ -109,12 +109,16 @@ if ($PSVersionTable.PSEdition -ne 'Desktop') {
     if ($winPsExe -and -not [string]::IsNullOrWhiteSpace($scriptPath) -and (Test-Path $scriptPath)) {
         try {
             Write-StartupTrace -Message "Non-Desktop host detected. Relaunching with Windows PowerShell: $winPsExe"
-            Start-Process -FilePath $winPsExe -ArgumentList (@(
+            $relaunchArgs = @(
                 '-NoProfile',
                 '-ExecutionPolicy', 'Bypass',
                 '-Sta',
                 '-File', $scriptPath
-            ) + $script:ForwardedCliArgs) | Out-Null
+            )
+            if ($script:ForwardedCliArgs -and $script:ForwardedCliArgs.Count -gt 0) {
+                $relaunchArgs += $script:ForwardedCliArgs
+            }
+            Start-Process -FilePath $winPsExe -ArgumentList $relaunchArgs | Out-Null
             Write-StartupTrace -Message "Relaunch command sent successfully"
             exit 0
         } catch {
@@ -178,12 +182,16 @@ if (-not $isAdmin) {
             $elevatedPowerShell = Join-Path $PSHOME 'powershell.exe'
             if (-not (Test-Path $elevatedPowerShell)) { $elevatedPowerShell = 'PowerShell.exe' }
             Write-StartupTrace -Message "Elevating with executable: $elevatedPowerShell"
-            Start-Process -FilePath $elevatedPowerShell -Verb RunAs -ArgumentList (@(
+            $elevationArgs = @(
                 '-NoProfile',
                 '-ExecutionPolicy', 'RemoteSigned',
                 '-Sta',
                 '-File', $scriptPath
-            ) + $script:ForwardedCliArgs) | Out-Null
+            )
+            if ($script:ForwardedCliArgs -and $script:ForwardedCliArgs.Count -gt 0) {
+                $elevationArgs += $script:ForwardedCliArgs
+            }
+            Start-Process -FilePath $elevatedPowerShell -Verb RunAs -ArgumentList $elevationArgs | Out-Null
             Write-StartupTrace -Message "Elevation command sent successfully"
             exit 0
         } catch {

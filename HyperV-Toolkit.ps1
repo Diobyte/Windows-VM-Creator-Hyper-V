@@ -1557,9 +1557,13 @@ function Get-GpuPartitionValues {
             if ($scaled -lt $effectiveMin) { $scaled = $effectiveMin }
             if ($scaled -gt $Max) { $scaled = $Max }
 
+            # Optimal must be capped to $scaled (the percentage-adjusted Max), not to
+            # the raw hardware $Max. If Optimal > $scaled the guest driver uses the
+            # larger Optimal value as its true ceiling, bypassing the slider entirely
+            # and mapping the full hardware VRAM aperture — causing a boot deadlock.
             [UInt64]$effectiveOptimal = if ($Optimal -gt 0) { $Optimal } else { $scaled }
             if ($effectiveOptimal -lt $effectiveMin) { $effectiveOptimal = $effectiveMin }
-            if ($effectiveOptimal -gt $Max) { $effectiveOptimal = $Max }
+            if ($effectiveOptimal -gt $scaled) { $effectiveOptimal = $scaled }
 
             return @{
                 Supported = $true
@@ -2997,26 +3001,28 @@ function Set-GpuPartitionForVM {
         # to map that entire VRAM/compute aperture via SLAT. Because only Min and
         # Optimal are backed the mapping requests fault, the hypervisor spinlock
         # never releases, and the Windows boot animation freezes before login.
-        # Setting Max = Optimal caps the guest's view to exactly what is backed.
+        # Use .Max (the slider-scaled value) for both MaxPartition* and OptimalPartition*.
+        # .Optimal was previously the raw hardware cap — unaffected by the slider — so
+        # the guest driver would map the full VRAM aperture and deadlock on boot.
         if ($partitionValues.VRAM.Supported) {
             $setParams['MinPartitionVRAM']     = $partitionValues.VRAM.Min
-            $setParams['MaxPartitionVRAM']     = $partitionValues.VRAM.Optimal
-            $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal
+            $setParams['MaxPartitionVRAM']     = $partitionValues.VRAM.Max
+            $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Max
         }
         if ($partitionValues.Encode.Supported) {
             $setParams['MinPartitionEncode']     = $partitionValues.Encode.Min
-            $setParams['MaxPartitionEncode']     = $partitionValues.Encode.Optimal
-            $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal
+            $setParams['MaxPartitionEncode']     = $partitionValues.Encode.Max
+            $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Max
         }
         if ($partitionValues.Decode.Supported) {
             $setParams['MinPartitionDecode']     = $partitionValues.Decode.Min
-            $setParams['MaxPartitionDecode']     = $partitionValues.Decode.Optimal
-            $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal
+            $setParams['MaxPartitionDecode']     = $partitionValues.Decode.Max
+            $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Max
         }
         if ($partitionValues.Compute.Supported) {
             $setParams['MinPartitionCompute']     = $partitionValues.Compute.Min
-            $setParams['MaxPartitionCompute']     = $partitionValues.Compute.Optimal
-            $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal
+            $setParams['MaxPartitionCompute']     = $partitionValues.Compute.Max
+            $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Max
         }
     } else {
         if ($partitionValues.VRAM.Supported) {

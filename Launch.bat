@@ -51,7 +51,15 @@ if %errorLevel% neq 0 (
     echo  Requesting administrator privileges...
     echo.
     set "LAUNCHER_PATH=%~f0"
-    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$launcher = $env:LAUNCHER_PATH; Start-Process -FilePath $launcher -Verb RunAs -ArgumentList @('--elevated')"
+    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "try { $launcher = $env:LAUNCHER_PATH; Start-Process -FilePath $launcher -Verb RunAs -ArgumentList @('--elevated') -ErrorAction Stop; exit 0 } catch { exit 1 }"
+    if %errorLevel% neq 0 (
+        call :log "ERROR: elevation request failed or was declined"
+        echo.
+        echo  ERROR: UAC elevation failed or was declined. Please run as Administrator.
+        echo  Press any key to exit...
+        pause >nul
+        exit /b 1
+    )
     call :log "Elevation request dispatched"
     exit /b
 )

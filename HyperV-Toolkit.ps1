@@ -822,12 +822,21 @@ function Set-VMGuestSecureBoot {
     )
 
     if (-not $EnableSecureBoot) {
-        Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
-        Write-Log "  Disabling Secure Boot (Windows 10 compatibility mode)" "OK"
-        return $true
+        try {
+            Set-VMFirmware -VMName $VMName -EnableSecureBoot Off -ErrorAction Stop
+            Write-Log "  Disabling Secure Boot (Windows 10 compatibility mode)" "OK"
+            return $true
+        } catch {
+            Write-Log "  Secure Boot disable failed: $($_.Exception.Message)" "WARN"
+            return $false
+        }
     }
 
-    Set-VMFirmware -VMName $VMName -EnableSecureBoot On -ErrorAction SilentlyContinue | Out-Null
+    try {
+        Set-VMFirmware -VMName $VMName -EnableSecureBoot On -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Log "  Secure Boot enable pre-step failed, continuing template attempts: $($_.Exception.Message)" "WARN"
+    }
     $templates = $TemplateOrder
     if (-not $templates -or $templates.Count -eq 0) {
         $templates = if ($GuestIsWindows11) {
@@ -1655,6 +1664,8 @@ function Copy-DriversToVhd {
         [switch]$ForceDelete
     )
 
+    $copySucceeded = $true
+
     $target = Join-Path "$($MountLetter)\" $Destination
 
     # If target exists and ForceDelete, remove it first
@@ -1689,6 +1700,7 @@ function Copy-DriversToVhd {
                     Copy-Item -Path $srcPath -Destination $target -Recurse -Force -ErrorAction Stop
                 } else {
                     Write-Log "[$VMName] Source path not found for fallback copy: $srcPath" "WARN"
+                    if ($FileMask -eq "*") { $copySucceeded = $false }
                 }
             }
         } else {
@@ -1697,11 +1709,15 @@ function Copy-DriversToVhd {
                 Copy-Item -Path $srcPath -Destination $target -Recurse -Force -ErrorAction Stop
             } else {
                 Write-Log "[$VMName] No files matching '$FileMask' in $Source" "WARN"
+                if ($FileMask -eq "*") { $copySucceeded = $false }
             }
         }
     } catch {
         Write-Log "[$VMName] ERROR copying files: $($_.Exception.Message)" "ERROR"
+        $copySucceeded = $false
     }
+
+    return $copySucceeded
 }
 
 function Copy-GpuDriverFolders {
@@ -1856,7 +1872,11 @@ function Copy-GpuDriverFolders {
     } else {
         # Full copy using robocopy or Copy-Item
         Write-Log "[$VMName] Copying entire DriverStore (this may take a while)..."
-        Copy-DriversToVhd -VMName $VMName -MountLetter $MountLetter -Source $HostDriverStore -Destination $VMDriverStore -ForceDelete
+        $fullCopyOk = Copy-DriversToVhd -VMName $VMName -MountLetter $MountLetter -Source $HostDriverStore -Destination $VMDriverStore -ForceDelete
+        if (-not $fullCopyOk) {
+            Write-Log "[$VMName] Full DriverStore copy did not complete successfully." "ERROR"
+            return $false
+        }
     }
 
     return $true
@@ -2551,7 +2571,7 @@ $grpGPUOpts           = New-Object System.Windows.Forms.GroupBox
 $grpGPUOpts.Text      = "Options"
 $grpGPUOpts.ForeColor = [System.Drawing.Color]::White
 $grpGPUOpts.Location  = New-Object System.Drawing.Point(378, 200)
-$grpGPUOpts.Size      = New-Object System.Drawing.Size(450, 95)
+$grpGPUOpts.Size      = New-Object System.Drawing.Size(450, 122)
 $tabGPU.Controls.Add($grpGPUOpts)
 
 $ctrlGPU["StartVM"] = New-Object System.Windows.Forms.CheckBox
@@ -3635,6 +3655,15 @@ $btnCreateVM.Add_Click({
 
         if (-not $UseGoldenImage) {
             if ([string]::IsNullOrWhiteSpace($ISOPath) -or -not (Test-Path $ISOPath)) { Write-Log "Valid ISO file is required." "ERROR"; return }
+            if (-not $script:MountedISO -or [string]::IsNullOrWhiteSpace($script:MountedISO.ImagePath)) {
+                Write-Log "Selected ISO is not mounted. Please re-select the ISO before creating the VM." "ERROR"
+                return
+            }
+            $mountedIsoPath = [string]$script:MountedISO.ImagePath
+            if ($mountedIsoPath.Trim().ToLowerInvariant() -ne $ISOPath.Trim().ToLowerInvariant()) {
+                Write-Log "Selected ISO does not match the currently mounted image. Re-select the ISO to refresh source metadata." "ERROR"
+                return
+            }
         } else {
             if ([string]::IsNullOrWhiteSpace($GoldenParentVHD) -or -not (Test-Path $GoldenParentVHD)) {
                 Write-Log "Golden Image mode is enabled. Please select a valid parent VHDX/VHD." "ERROR"
@@ -3871,6 +3900,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 'if not exist "%WORKDIR%\VB" mkdir "%WORKDIR%\VB"'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; Expand-Archive -Path ''%WORKDIR%\vb.zip'' -DestinationPath ''%WORKDIR%\VB'' -Force" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] VB Cable archive extraction failed >> %LOGFILE% & goto :AfterVBCable)'
+                'if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (echo [%date% %time%] VB Cable install skipped on ARM64 guest architecture >> %LOGFILE% & goto :AfterVBCable)'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\VB\VBCABLE_Setup_x64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''VB[- ]Audio|Vincent Burel'') { throw ''VB Cable signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] VB Cable signature validation failed >> %LOGFILE% & goto :AfterVBCable)'
                 'start /wait "" "%WORKDIR%\VB\VBCABLE_Setup_x64.exe" -h -i -H -n'
@@ -3887,6 +3917,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 'if not exist "%WORKDIR%\usbmmidd_v2" mkdir "%WORKDIR%\usbmmidd_v2"'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; Expand-Archive -Path ''%WORKDIR%\usbmmidd_v2.zip'' -DestinationPath ''%WORKDIR%'' -Force" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] USBMMIDD archive extraction failed >> %LOGFILE% & goto :AfterUSBMMIDD)'
+                'if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (echo [%date% %time%] USBMMIDD install skipped on ARM64 guest architecture >> %LOGFILE% & goto :AfterUSBMMIDD)'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\usbmmidd_v2\deviceinstaller64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Amyuni'') { throw ''USBMMIDD signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] USBMMIDD signature validation failed >> %LOGFILE% & goto :AfterUSBMMIDD)'
                 '@echo off'
@@ -4202,6 +4233,9 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
 
         # ---- Create Hyper-V VM ----
+        if (Get-Variable -Name vmWasRunning -Scope Local -ErrorAction SilentlyContinue) {
+            [void]$vmWasRunning
+        }
         Update-CreateProgress -Percent 88 -Status "Creating Hyper-V VM..."
         Write-Log "Creating Generation 2 Hyper-V VM..."
         New-VM -Name $VMName -MemoryStartupBytes ($MemGB * 1GB) -Generation 2 -VHDPath $VHDPath -Path $VMLoc -SwitchName $VMSwitch | Out-Null

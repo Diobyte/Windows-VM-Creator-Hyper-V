@@ -14,9 +14,16 @@ if not exist "%SCRIPT_PATH%" (
     exit /b 1
 )
 
-:: Check for admin privileges
-fltmc >nul 2>&1
+:: Check for admin privileges (net session is more reliable than fltmc)
+net session >nul 2>&1
 if %errorLevel% neq 0 (
+    if /i "%~1"=="--elevated" (
+        echo.
+        echo  ERROR: UAC elevation failed or was declined. Please run as Administrator.
+        echo  Press any key to exit...
+        pause >nul
+        exit /b 1
+    )
     echo.
     echo  Requesting administrator privileges...
     echo.

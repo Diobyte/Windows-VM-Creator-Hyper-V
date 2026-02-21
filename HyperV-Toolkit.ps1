@@ -1,8 +1,16 @@
+#Requires -Version 5.1
+
 #region ==================== INITIALIZATION ====================
 
 $script:ToolkitVersion = "Version 1"
 $script:ToolkitCreator = "Diobyte"
 $script:ToolkitTagline = "Made with love"
+
+# Well-known Windows build numbers
+$script:BUILD_WIN10_RS4    = 17134   # Windows 10 1803 (earliest supported for modern Secure Boot)
+$script:BUILD_WIN10_RS5    = 17763   # Windows 10 1809 (Secure Boot recommended)
+$script:BUILD_WIN10_MIN    = 10240   # Windows 10 RTM
+$script:BUILD_WIN11_MIN    = 22000   # Windows 11 21H2
 
 # Execution Policy
 $currentPolicy = Get-ExecutionPolicy -Scope Process
@@ -67,7 +75,7 @@ function Test-HyperVRunning {
 }
 
 $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue
-if (-not ($feature.State -eq "Enabled" -and (Test-HyperVRunning))) {
+if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning))) {
     $installChoice = [System.Windows.MessageBox]::Show(
         "Hyper-V is not fully enabled or the hypervisor is not running.`n`nA system restart will be required after installation.`n`nDo you want to enable it now?",
         "Enable Hyper-V", "OKCancel", "Warning"
@@ -102,7 +110,7 @@ if (-not ($feature.State -eq "Enabled" -and (Test-HyperVRunning))) {
 # Detect host OS
 $script:HostOsName = (Get-CimInstance Win32_OperatingSystem).Caption
 $script:HostBuild  = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuild
-$script:HostIsWin11 = ($script:HostBuild -ge 22000)
+$script:HostIsWin11 = ($script:HostBuild -ge $script:BUILD_WIN11_MIN)
 $script:HostIsWin11Pro = $script:HostOsName -match 'Windows 11.*(Pro|Enterprise|Education)'
 try {
     $addGpuCmd = Get-Command Add-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
@@ -122,6 +130,8 @@ $script:EditionMap          = @{}
 $script:DetectedWinVersion  = ""      # "Windows 10" or "Windows 11"
 $script:DetectedBuild       = 0       # e.g. 19045, 22621
 $script:LogBox              = $null   # Set when GUI is built
+$script:IsCreating          = $false  # Re-entrancy guard for VM creation
+$script:IsUpdatingGPU       = $false  # Re-entrancy guard for GPU update
 
 #endregion
 
@@ -261,9 +271,10 @@ function Set-AutoPlay {
 
     if ($Disable -and $current -eq 0) {
         Set-ItemProperty -Path $regPath -Name $regName -Value 1
-        return 0  # was enabled
+        return 0  # was enabled, now disabled
     } elseif (-not $Disable -and $current -eq 1) {
-        # Only restore if we disabled it
+        Set-ItemProperty -Path $regPath -Name $regName -Value 0
+        return 1  # was disabled, now restored
     }
     return $current
 }
@@ -274,6 +285,7 @@ function Dismount-ImageRetry {
         Dismounts a disk image with retry logic to handle in-use locks.
     #>
     param([string]$ImagePath, [int]$MaxRetries = 5)
+    if ($MaxRetries -lt 1) { $MaxRetries = 1 }
     for ($i = 1; $i -le $MaxRetries; $i++) {
         try {
             $img = Get-DiskImage -ImagePath $ImagePath -ErrorAction SilentlyContinue
@@ -406,6 +418,26 @@ function Test-DirectoryWritable {
     } catch {
         return $false
     }
+}
+
+# Well-known GPT partition type GUIDs
+$script:GptEfi = '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}'
+$script:GptMsr = '{E3C9E316-0B5C-4DB8-817D-F92DF00215AE}'
+
+function Get-DataPartitions {
+    <#
+    .SYNOPSIS
+        Returns non-system, non-reserved partitions for a given disk number.
+        Centralises the GPT filter logic used in multiple places.
+    #>
+    param([int]$DiskNumber)
+    Get-Partition -DiskNumber $DiskNumber -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Type -ne 'System' -and
+            $_.Type -ne 'Reserved' -and
+            $_.GptType -ne $script:GptEfi -and
+            $_.GptType -ne $script:GptMsr
+        }
 }
 
 function Set-ToolkitNatSwitch {
@@ -551,7 +583,7 @@ function Set-VMGuestSecureBoot {
     if (-not $templates -or $templates.Count -eq 0) {
         $templates = if ($GuestIsWindows11) {
             @('MicrosoftUEFICertificateAuthority', 'MicrosoftWindows')
-        } elseif ($GuestBuild -gt 0 -and $GuestBuild -lt 17134) {
+        } elseif ($GuestBuild -gt 0 -and $GuestBuild -lt $script:BUILD_WIN10_RS4) {
             @('MicrosoftUEFICertificateAuthority', 'MicrosoftWindows')
         } else {
             @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
@@ -641,7 +673,7 @@ function Test-GpuPPreFlight {
     }
 
     # Check 4: Win10 requires GPUName AUTO
-    if ($script:HostBuild -lt 22000) {
+    if ($script:HostBuild -lt $script:BUILD_WIN11_MIN) {
         $issues += "INFO: Windows 10 host detected - GPU-P will use AUTO (default GPU). Specific GPU selection requires Windows 11."
     }
 
@@ -658,12 +690,14 @@ function Get-GpuPartitionValues {
         [ValidateRange(1,100)]
         [int]$Percentage = 100
     )
-    [float]$divider = [math]::Round(100 / $Percentage, 2)
+    [double]$divider = [math]::Round(100 / $Percentage, 2)
+    # Use [UInt64] for Encode to avoid precision loss on the UInt64-max value
+    [UInt64]$encodeMax = [UInt64]::MaxValue
     return @{
-        VRAM    = [math]::Round(1000000000 / $divider)
-        Encode  = [math]::Round([decimal]18446744073709551615 / $divider)
-        Decode  = [math]::Round(1000000000 / $divider)
-        Compute = [math]::Round(1000000000 / $divider)
+        VRAM    = [UInt64][math]::Floor(1000000000 / $divider)
+        Encode  = [UInt64][math]::Floor([double]$encodeMax / $divider)
+        Decode  = [UInt64][math]::Floor(1000000000 / $divider)
+        Compute = [UInt64][math]::Floor(1000000000 / $divider)
     }
 }
 
@@ -680,7 +714,7 @@ function Copy-GpuServiceDriver {
     try {
         $gpu = $null
         if ($GPUName -eq "AUTO") {
-            $partList = Get-WmiObject -Class "Msvm_PartitionableGpu" -ComputerName $env:COMPUTERNAME -Namespace "ROOT\virtualization\v2" -ErrorAction SilentlyContinue
+            $partList = Get-CimInstance -Namespace "ROOT\virtualization\v2" -ClassName "Msvm_PartitionableGpu" -ErrorAction SilentlyContinue
             if ($partList) {
                 $devPath = if ($partList.Name -is [array]) { $partList.Name[0] } else { $partList.Name }
                 $gpu = Get-PnpDevice | Where-Object {
@@ -699,11 +733,24 @@ function Copy-GpuServiceDriver {
         $svcName = $gpu.Service
         if (-not $svcName) { return }
 
-        $sysDriver = Get-WmiObject Win32_SystemDriver | Where-Object { $_.Name -eq $svcName }
+        $sysDriver = Get-CimInstance Win32_SystemDriver | Where-Object { $_.Name -eq $svcName }
         if ($sysDriver -and $sysDriver.PathName) {
             $servicePath = $sysDriver.PathName
-            $serviceDriverDir  = ($servicePath.Split('\')[0..5]) -join '\'
-            $serviceDriverDest = ("$MountLetter\" + ($servicePath.Split('\')[1..5] -join '\')).Replace('DriverStore','HostDriverStore')
+            # Robustly extract the driver folder: find the DriverStore\FileRepository segment
+            $segments = $servicePath.Split('\')
+            $dsIdx = -1
+            for ($si = 0; $si -lt $segments.Count; $si++) {
+                if ($segments[$si] -eq 'FileRepository') { $dsIdx = $si; break }
+            }
+            if ($dsIdx -ge 0 -and ($dsIdx + 1) -lt $segments.Count) {
+                $serviceDriverDir  = ($segments[0..($dsIdx + 1)]) -join '\'
+                $relPath = ($segments[1..($dsIdx + 1)]) -join '\'
+                $serviceDriverDest = Join-Path "$MountLetter\" ($relPath.Replace('DriverStore','HostDriverStore'))
+            } else {
+                # Fallback to original 6-segment approach
+                $serviceDriverDir  = ($segments[0..5]) -join '\'
+                $serviceDriverDest = ("$MountLetter\" + ($segments[1..5] -join '\')).Replace('DriverStore','HostDriverStore')
+            }
 
             if (Test-Path $serviceDriverDir) {
                 if (-not (Test-Path $serviceDriverDest)) {
@@ -764,9 +811,9 @@ function Resolve-GuestWindowsProfile {
         [int]$DetectedBuild
     )
 
-    $isWin11 = ($DetectedWinVersion -eq 'Windows 11' -or $DetectedBuild -ge 22000)
-    $isWin10 = (-not $isWin11) -and ($DetectedWinVersion -eq 'Windows 10' -or ($DetectedBuild -ge 10240 -and $DetectedBuild -lt 22000))
-    $isLegacyWin10 = $isWin10 -and $DetectedBuild -gt 0 -and $DetectedBuild -lt 17134
+    $isWin11 = ($DetectedWinVersion -eq 'Windows 11' -or $DetectedBuild -ge $script:BUILD_WIN11_MIN)
+    $isWin10 = (-not $isWin11) -and ($DetectedWinVersion -eq 'Windows 10' -or ($DetectedBuild -ge $script:BUILD_WIN10_MIN -and $DetectedBuild -lt $script:BUILD_WIN11_MIN))
+    $isLegacyWin10 = $isWin10 -and $DetectedBuild -gt 0 -and $DetectedBuild -lt $script:BUILD_WIN10_RS4
 
     $name = if ($isWin11) {
         'Windows 11'
@@ -781,7 +828,7 @@ function Resolve-GuestWindowsProfile {
     if ($isWin11) {
         $defaultSecureBoot = $true
         $defaultTPM = $true
-    } elseif ($isWin10 -and $DetectedBuild -ge 17763) {
+    } elseif ($isWin10 -and $DetectedBuild -ge $script:BUILD_WIN10_RS5) {
         $defaultSecureBoot = $true
     }
 
@@ -913,7 +960,7 @@ function New-UnattendXml {
 
     # Timezone Detection
     try { $timezone = (Get-TimeZone).Id }
-    catch { $timezone = (Get-WmiObject Win32_TimeZone).StandardName }
+    catch { $timezone = (Get-CimInstance Win32_TimeZone).StandardName }
 
     $xmlVMName       = ConvertTo-XmlEscapedValue -Value $VMName
     $xmlUsername     = ConvertTo-XmlEscapedValue -Value $Username
@@ -927,6 +974,7 @@ function New-UnattendXml {
     # Build the BypassNRO command for specialize pass (helps Win11 offline setup)
     $bypassBlock = ""
     if ($IsWindows11) {
+        # NOTE: processorArchitecture is hardcoded to "amd64". ARM64 guests would need "arm64" here.
         $bypassBlock = @"
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
@@ -996,7 +1044,7 @@ $bypassBlock
       <AutoLogon>
                 <Username>$xmlUsername</Username>
         <Enabled>true</Enabled>
-        <LogonCount>9999</LogonCount>
+        <LogonCount>3</LogonCount>
         <Password>
                     <Value>$xmlPassword</Value>
           <PlainText>true</PlainText>
@@ -1018,6 +1066,7 @@ $bypassBlock
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>2</Order>
+          <!-- Username is validated to ^[a-zA-Z0-9]+$ so CMD-safe without extra escaping -->
           <CommandLine>cmd /c wmic useraccount where name="$Username" set PasswordExpires=False</CommandLine>
           <Description>Disable Password Expiration</Description>
         </SynchronousCommand>
@@ -1247,8 +1296,7 @@ function Copy-GpuDriverFolders {
 
             $disk = Get-DiskImage -ImagePath $VhdPath | Get-Disk
             # Find the NTFS partition and extend it
-            $partition = Get-Partition -DiskNumber $disk.Number |
-                Where-Object { $_.Type -ne 'System' -and $_.Type -ne 'Reserved' -and $_.GptType -ne '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}' -and $_.GptType -ne '{E3C9E316-0B5C-4DB8-817D-F92DF00215AE}' } |
+            $partition = Get-DataPartitions -DiskNumber $disk.Number |
                 Select-Object -Last 1
 
             if ($partition) {
@@ -1260,8 +1308,7 @@ function Copy-GpuDriverFolders {
             # Re-check mounted Windows volume and free space
             Start-Sleep -Seconds 1
             $updatedDriveLetter = $null
-            $partitions = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue |
-                Where-Object { $_.Type -ne 'System' -and $_.Type -ne 'Reserved' -and $_.GptType -ne '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}' -and $_.GptType -ne '{E3C9E316-0B5C-4DB8-817D-F92DF00215AE}' }
+            $partitions = Get-DataPartitions -DiskNumber $disk.Number
             foreach ($part in $partitions) {
                 $vol = Get-Volume -Partition $part -ErrorAction SilentlyContinue
                 if ($vol -and $vol.FileSystem -eq 'NTFS' -and $vol.DriveLetter) {
@@ -1540,7 +1587,7 @@ $ctrlCreate["Username"].Text = "User"
 $rowY += 32
 
 $ctrlCreate["Password"] = New-LabeledControl $grpConfig 12 $rowY "Password:" -ControlWidth 200
-$ctrlCreate["Password"].Text = "Password1"
+$ctrlCreate["Password"].Text = ""
 $ctrlCreate["Password"].UseSystemPasswordChar = $true
 $rowY += 32
 
@@ -2087,8 +2134,9 @@ function Set-ButtonHover {
     )
     if (-not $Button) { return }
 
-    $normalColor = $Normal
-    $hoverColor = $Hover
+    # Typed copies for closure capture clarity
+    [System.Drawing.Color]$normalColor = $Normal
+    [System.Drawing.Color]$hoverColor  = $Hover
     if ($normalColor -eq $null -or $normalColor.IsEmpty) { $normalColor = [System.Drawing.SystemColors]::ControlDarkDark }
     if ($hoverColor -eq $null -or $hoverColor.IsEmpty) { $hoverColor = $normalColor }
 
@@ -2251,7 +2299,12 @@ $btnBrowseISO.Add_Click({
             $script:MountedISO = Mount-DiskImage -ImagePath $dlg.FileName -PassThru
             Register-TrackedMountedImage -ImagePath $dlg.FileName
             Start-Sleep -Seconds 2
-            $isoDrive = ($script:MountedISO | Get-DiskImage | Get-Volume | Where-Object DriveLetter).DriveLetter + ":"
+            $isoVolume = $script:MountedISO | Get-DiskImage | Get-Volume | Where-Object { $_.DriveLetter }
+            if (-not $isoVolume -or -not $isoVolume.DriveLetter) {
+                Write-Log "ISO mounted but no drive letter was assigned. Try dismounting and re-mounting." "ERROR"
+                return
+            }
+            $isoDrive = $isoVolume.DriveLetter + ":"
 
             # Find WIM or ESD
             $script:WimFile = Join-Path "$isoDrive\sources" "install.wim"
@@ -2352,6 +2405,10 @@ Update-CreateModeUi
 $ctrlCreate["Edition"].Add_SelectedIndexChanged({
     $selectedEdition = $ctrlCreate["Edition"].SelectedItem
     if ($selectedEdition -and $script:EditionMap.ContainsKey($selectedEdition)) {
+        if (-not $script:WimFile -or -not (Test-Path $script:WimFile)) {
+            Write-Log "WIM file no longer accessible (ISO may have been dismounted). Re-select the ISO." "WARN"
+            return
+        }
         $idx = $script:EditionMap[$selectedEdition]
         $versionInfo = Get-WimVersionInfo -WimFile $script:WimFile -Index $idx
         $script:DetectedWinVersion = $versionInfo.WinVersion
@@ -2376,6 +2433,10 @@ $ctrlCreate["Memory"].Add_ValueChanged({
 #  CREATE VM - Main Logic
 # ================================================================
 $btnCreateVM.Add_Click({
+    # Re-entrancy guard: prevent double-click during VM creation
+    if ($script:IsCreating) { return }
+    $script:IsCreating = $true
+
     $VMName = ""
     $VMLoc = ""
     $VHDPath = ""
@@ -2492,7 +2553,7 @@ $btnCreateVM.Add_Click({
         }
         if (-not (Test-DirectoryWritable -Path $VMLocBase)) { Write-Log "VM Location is not writable: $VMLocBase" "ERROR"; return }
 
-        $requiredDiskGB = $DiskGB + 8
+        $requiredDiskGB = if ($FixedVHD) { $DiskGB + 8 } else { 16 }  # Fixed VHD needs full size; dynamic only needs ~16 GB initially
         $freeDiskGB = Get-PathAvailableSpaceGB -Path $VMLocBase
         if ($freeDiskGB -ge 0 -and $freeDiskGB -lt $requiredDiskGB) {
             Write-Log "Insufficient disk space in VM location. Need about $requiredDiskGB GB free, found $freeDiskGB GB." "ERROR"
@@ -2632,6 +2693,8 @@ $btnCreateVM.Add_Click({
 
         if (-not $UseGoldenImage) {
             # ---- Create QRes.exe ----
+            # QRes v1.1 by Anders Kjersem - open-source display resolution changer
+            # Source: https://sourceforge.net/projects/qres/ (embedded for offline VM provisioning)
             Update-CreateProgress -Percent 15 -Status "Preparing setup tools..."
             Write-Log "Creating QRes.exe..."
             $tempExe = Join-Path $VMLoc "QRes.exe"
@@ -2742,6 +2805,16 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ''
             )
         }
+        # ---- Cleanup unattend files that may contain plaintext credentials (#12) ----
+        $lines += @(
+            ''
+            ':: --- Remove unattend XML files (may contain plaintext passwords) ---'
+            'echo [%date% %time%] Cleaning up unattend files >> %LOGFILE%'
+            'del /f /q C:\Autounattend.xml 2>nul'
+            'del /f /q C:\Windows\Panther\Unattend\Unattend.xml 2>nul'
+            'del /f /q C:\Windows\System32\Sysprep\Unattend.xml 2>nul'
+            'echo [%date% %time%] Unattend cleanup complete >> %LOGFILE%'
+        )
         $lines += @(
             'echo [%date% %time%] SetupComplete.cmd finished >> %LOGFILE%'
             'endlocal'
@@ -2772,36 +2845,39 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             }
 
         # ---- Mount VHD and partition ----
-        Update-CreateProgress -Percent 38 -Status "Partitioning virtual disk..."
-        Write-Log "Mounting VHD and creating GPT/EFI/MSR/Windows partitions..."
-        $mountedVHD = Mount-VHD -Path $VHDPath -Passthru
-        Register-TrackedMountedImage -ImagePath $VHDPath
-        $diskNumber = $mountedVHD.DiskNumber
-        Initialize-Disk -Number $diskNumber -PartitionStyle GPT -PassThru | Out-Null
+            Update-CreateProgress -Percent 38 -Status "Partitioning virtual disk..."
+            Write-Log "Mounting VHD and creating GPT/EFI/MSR/Windows partitions..."
+            $mountedVHD = Mount-VHD -Path $VHDPath -Passthru
+            Register-TrackedMountedImage -ImagePath $VHDPath
+            $diskNumber = $mountedVHD.DiskNumber
+            Initialize-Disk -Number $diskNumber -PartitionStyle GPT -PassThru | Out-Null
 
-        # EFI System Partition (260MB for better compatibility with old Win10)
-        $efi = New-Partition -DiskNumber $diskNumber -Size 260MB -GptType "{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}" -AssignDriveLetter
-        Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel "System" -Confirm:$false | Out-Null
+            # EFI System Partition (260MB for better compatibility with old Win10)
+            $efi = New-Partition -DiskNumber $diskNumber -Size 260MB -GptType "{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}" -AssignDriveLetter
+            Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel "System" -Confirm:$false | Out-Null
 
-        # MSR Partition
-        New-Partition -DiskNumber $diskNumber -Size 16MB -GptType "{E3C9E316-0B5C-4DB8-817D-F92DF00215AE}" | Out-Null
+            # MSR Partition
+            New-Partition -DiskNumber $diskNumber -Size 16MB -GptType "{E3C9E316-0B5C-4DB8-817D-F92DF00215AE}" | Out-Null
 
-        # Windows Partition (remaining space)
-        $winPart = New-Partition -DiskNumber $diskNumber -UseMaximumSize -AssignDriveLetter
-        $driveLetter = $winPart.DriveLetter + ":"
-        Format-Volume -Partition $winPart -FileSystem NTFS -NewFileSystemLabel $VMName -Confirm:$false | Out-Null
+            # Windows Partition (remaining space)
+            $winPart = New-Partition -DiskNumber $diskNumber -UseMaximumSize -AssignDriveLetter
+            $driveLetter = $winPart.DriveLetter + ":"
+            Format-Volume -Partition $winPart -FileSystem NTFS -NewFileSystemLabel $VMName -Confirm:$false | Out-Null
 
-        # Wait for drive to be ready
-        $driveReady = $false
-        for ($w = 0; $w -lt 15; $w++) {
-            if (Test-Path "$driveLetter\") { $driveReady = $true; break }
-            Start-Sleep -Seconds 1
-        }
-        if (-not $driveReady) { Write-Log "Windows partition drive not ready at $driveLetter" "WARN" }
+            # Wait for drive to be ready
+            $driveReady = $false
+            for ($w = 0; $w -lt 15; $w++) {
+                if (Test-Path "$driveLetter\") { $driveReady = $true; break }
+                Start-Sleep -Seconds 1
+            }
+            if (-not $driveReady) {
+                Write-Log "Windows partition drive not ready at $driveLetter after 15 seconds. Aborting." "ERROR"
+                throw "Windows partition drive not accessible at $driveLetter"
+            }
 
-        # ---- Apply Windows image ----
-        Update-CreateProgress -Percent 48 -Status "Applying Windows image (this can take a while)..."
-        Write-Log "Applying Windows image (Edition: $SelectedEdition, Index: $SelectedIndex)..."
+            # ---- Apply Windows image ----
+            Update-CreateProgress -Percent 48 -Status "Applying Windows image (this can take a while)..."
+            Write-Log "Applying Windows image (Edition: $SelectedEdition, Index: $SelectedIndex)..."
         Write-Log "This may take several minutes..."
         Invoke-DismApplyImage -ImageFile $script:WimFile -Index $SelectedIndex -ApplyDir $driveLetter -PreferCompactApply $guestProfile.PreferCompactApply
         Write-Log "Windows image applied." "OK"
@@ -2948,6 +3024,19 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         } else {
             Update-CreateProgress -Percent 30 -Status "Creating differencing disk from golden image..."
             $VHDPath = Join-Path $VMLoc "$VMName.vhdx"
+
+            # Validate parent VHDX exists and destination has enough space for the diff disk
+            if (-not (Test-Path $GoldenParentVHD)) {
+                throw "Golden parent VHDX not found: $GoldenParentVHD"
+            }
+            $parentSize = (Get-Item $GoldenParentVHD).Length
+            $destDrive  = (Split-Path -Qualifier $VMLoc)
+            $destFree   = (Get-PSDrive ($destDrive.TrimEnd(':'))).Free
+            # Differencing disk starts small but grows; ensure at least 2 GB headroom
+            if ($destFree -lt 2GB) {
+                throw "Insufficient disk space on $destDrive for differencing VHDX ($('{0:N1}' -f ($destFree/1GB)) GB free, need >= 2 GB)."
+            }
+
             Write-Log "Creating differencing VHDX from parent: $GoldenParentVHD"
             New-VHD -Path $VHDPath -ParentPath $GoldenParentVHD -Differencing | Out-Null
             Write-Log "Golden image differencing disk created." "OK"
@@ -3111,6 +3200,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 Write-Log "Could not restore AutoPlay state: $($_.Exception.Message)" "WARN"
             }
         }
+        $script:IsCreating = $false
         $tabControl.Enabled  = $true
         $btnCreateVM.Enabled = $true
         if ($ctrlCreate.ContainsKey("CreateStatus") -and $ctrlCreate.ContainsKey("CreateProgress") -and $ctrlCreate["CreateProgress"].Value -lt 100) {
@@ -3123,6 +3213,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 #  UPDATE GPU - Main Logic
 # ================================================================
 $btnUpdateGPU.Add_Click({
+    # Re-entrancy guard: prevent double-click during GPU update
+    if ($script:IsUpdatingGPU) { return }
+    $script:IsUpdatingGPU = $true
+
     $originalAutoPlay = $null
     $autoPlayChanged = $false
 
@@ -3270,8 +3364,7 @@ $btnUpdateGPU.Add_Click({
                 $waited = 0
                 while (-not $mountLetter -and $waited -lt $maxWait) {
                     Start-Sleep -Seconds 1
-                    $partitions = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Type -ne 'System' -and $_.Type -ne 'Reserved' -and $_.GptType -ne '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}' -and $_.GptType -ne '{E3C9E316-0B5C-4DB8-817D-F92DF00215AE}' }
+                    $partitions = Get-DataPartitions -DiskNumber $disk.Number
                     foreach ($part in $partitions) {
                         $vol = Get-Volume -Partition $part -ErrorAction SilentlyContinue
                         if ($vol -and $vol.FileSystem -eq 'NTFS' -and $vol.DriveLetter) {
@@ -3300,9 +3393,16 @@ $btnUpdateGPU.Add_Click({
                 if ($script:SupportsGpuInstancePath -and $providerObj -and $providerObj.Provider) {
                     switch ($gpuVendor) {
                         "NVIDIA" {
-                            Write-Log "[$VMName] Copying NVIDIA System32 DLLs (nv*)..."
-                            Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                                -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask "nv*"
+                            # Copy NVIDIA System32 DLLs using targeted patterns to avoid
+                            # overwriting unrelated files that happen to start with 'nv'.
+                            $nvPatterns = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
+                                            'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
+                                            'nvwgf2*.dll','nvidia*.dll')
+                            Write-Log "[$VMName] Copying NVIDIA System32 DLLs..."
+                            foreach ($pat in $nvPatterns) {
+                                Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
+                                    -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask $pat
+                            }
                         }
                         "AMD" {
                             Write-Log "[$VMName] Copying AMD System32 DLLs..."
@@ -3318,9 +3418,14 @@ $btnUpdateGPU.Add_Click({
                 } else {
                     # Win10 default - check for NVIDIA
                     if (Test-HostHasNvidiaGpu) {
-                        Write-Log "[$VMName] Host has NVIDIA GPU, copying nv* DLLs..."
-                        Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
-                            -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask "nv*"
+                        $nvPatterns = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
+                                        'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
+                                        'nvwgf2*.dll','nvidia*.dll')
+                        Write-Log "[$VMName] Host has NVIDIA GPU, copying NVIDIA DLLs..."
+                        foreach ($pat in $nvPatterns) {
+                            Copy-DriversToVhd -VMName $VMName -MountLetter $mountLetter `
+                                -Source "C:\Windows\System32" -Destination "Windows\System32" -FileMask $pat
+                        }
                     }
                 }
 
@@ -3376,6 +3481,7 @@ $btnUpdateGPU.Add_Click({
                 Write-Log "Could not restore AutoPlay state after GPU update: $($_.Exception.Message)" "WARN"
             }
         }
+        $script:IsUpdatingGPU = $false
         $tabControl.Enabled   = $true
         $btnUpdateGPU.Enabled = $true
     }

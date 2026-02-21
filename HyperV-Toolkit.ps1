@@ -1,5 +1,16 @@
 #Requires -Version 5.1
 
+[CmdletBinding()]
+param(
+    [string]$VMName,
+    [string]$ISOPath,
+    [switch]$Headless,
+    [switch]$WhatIf
+)
+
+# Use strict mode to catch variable issues
+Set-StrictMode -Version Latest
+
 #region ==================== INITIALIZATION ====================
 
 $script:ToolkitVersion = "Version 1"
@@ -155,6 +166,7 @@ function Test-HyperVRunning {
 }
 
 $feature = $null
+$featureJob = $null
 try {
     $featureJob = Start-Job -ScriptBlock {
         param($FeatureName)
@@ -214,39 +226,38 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
         }
     }
     if (-not $skipInstall) {
-    $installChoice = [System.Windows.MessageBox]::Show(
-        "Hyper-V is not fully enabled or the hypervisor is not running.`n`nA system restart will be required after installation.`n`nDo you want to enable it now?",
-        "Enable Hyper-V", "OKCancel", "Warning"
-    )
-    if ($installChoice -eq "OK") {
-        try {
-            Enable-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -All -NoRestart -ErrorAction Stop *> $null
-            $Global:LASTEXITCODE = 0
-            bcdedit /set hypervisorlaunchtype auto *> $null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "    Warning: bcdedit returned exit code $LASTEXITCODE" -ForegroundColor Yellow
-            }
-            $restartChoice = [System.Windows.MessageBox]::Show(
-                "Hyper-V has been enabled successfully.`n`nDo you want to restart now?",
-                "Restart Required", "OKCancel", "Question"
-            )
-            if ($restartChoice -eq "OK") {
-                try {
-                    Restart-Computer -ErrorAction Stop
-                } catch {
-                    [System.Windows.MessageBox]::Show(
-                        "Automatic restart failed. Please restart your PC manually, then run the toolkit again.",
-                        "Manual Restart Required", "OK", "Warning"
-                    ) | Out-Null
-                    exit 0
+        $installChoice = [System.Windows.MessageBox]::Show(
+            "Hyper-V is not fully enabled or the hypervisor is not running.`n`nA system restart will be required after installation.`n`nDo you want to enable it now?",
+            "Enable Hyper-V", "OKCancel", "Warning"
+        )
+        if ($installChoice -eq "OK") {
+            try {
+                Enable-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -All -NoRestart -ErrorAction Stop *> $null
+                bcdedit /set hypervisorlaunchtype auto *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "    Warning: bcdedit returned exit code $LASTEXITCODE" -ForegroundColor Yellow
                 }
+                $restartChoice = [System.Windows.MessageBox]::Show(
+                    "Hyper-V has been enabled successfully.`n`nDo you want to restart now?",
+                    "Restart Required", "OKCancel", "Question"
+                )
+                if ($restartChoice -eq "OK") {
+                    try {
+                        Restart-Computer -ErrorAction Stop
+                    } catch {
+                        [System.Windows.MessageBox]::Show(
+                            "Automatic restart failed. Please restart your PC manually, then run the toolkit again.",
+                            "Manual Restart Required", "OK", "Warning"
+                        ) | Out-Null
+                        exit 0
+                    }
+                }
+                else { Write-Output "Please restart your PC and run the script again."; exit 0 }
+            } catch {
+                [System.Windows.MessageBox]::Show("Failed to enable Hyper-V.`n`nError: $_", "Error", "OK", "Error") | Out-Null
+                exit 1
             }
-            else { Write-Output "Please restart your PC and run the script again."; exit 0 }
-        } catch {
-            [System.Windows.MessageBox]::Show("Failed to enable Hyper-V.`n`nError: $_", "Error", "OK", "Error") | Out-Null
-            exit 1
-        }
-    } else { exit 0 }
+        } else { exit 0 }
     } # end if (-not $skipInstall)
 }
 
@@ -752,7 +763,10 @@ function Get-PathAvailableSpaceGB {
             }
         }
 
-        # UNC paths - space check not supported, return -1 (caller skips check)
+        # UNC paths - space check not supported, warn user
+        if ($root -match '^\\\\') {
+            Write-Log "UNC path detected: $Path. Free space cannot be verified for network paths." "WARN"
+        }
         return -1
     } catch {
         return -1
@@ -899,7 +913,7 @@ function Update-CreateProgress {
         $ctrlCreate["CreateStatus"].Refresh()
     }
     # Pump the Windows message queue so the UI stays responsive during long sync operations
-    try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+    # DoEvents removed - can cause reentrancy issues in event handlers
 }
 
 function Remove-PartialVmArtifacts {
@@ -1044,7 +1058,10 @@ function ConvertTo-UnattendPassword {
         Windows format: base64( UTF-16LE( password + "Password" ) )
     #>
     param([AllowNull()][string]$PlainText)
-    if ([string]::IsNullOrEmpty($PlainText)) { return "" }
+    if ([string]::IsNullOrEmpty($PlainText)) { 
+        Write-Log "Warning: Empty password provided to ConvertTo-UnattendPassword" "WARN"
+        return "" 
+    }
     $combined = $PlainText + "Password"
     $bytes = [System.Text.Encoding]::Unicode.GetBytes($combined)
     return [Convert]::ToBase64String($bytes)
@@ -1587,18 +1604,11 @@ function Invoke-DismApplyImage {
         $dismOutput = $allOutput
         $exitCode = if ($null -ne $dismExitCode) { $dismExitCode } else { 1 }
 
+        # Log non-progress DISM output lines (progress was already logged during polling)
         foreach ($line in $dismOutput) {
             $lineStr = "$line".Trim()
-            if ($lineStr -and $lineStr -notmatch '^\s*$') {
-                if ($lineStr -match '\d+\.\d+%') {
-                    $pctMatch = [regex]::Match($lineStr, '(\d+)\.\d+%')
-                    if ($pctMatch.Success) {
-                        $pct = [int]$pctMatch.Groups[1].Value
-                        if ($pct % 25 -eq 0 -or $pct -ge 99) { Write-Log "  DISM: $lineStr" }
-                    }
-                } elseif ($lineStr -notmatch '^Deployment Image|^Version:') {
-                    Write-Log "  DISM: $lineStr"
-                }
+            if ($lineStr -and $lineStr -notmatch '^\s*$' -and $lineStr -notmatch '\d+\.\d+%' -and $lineStr -notmatch '^Deployment Image|^Version:') {
+                Write-Log "  DISM: $lineStr"
             }
         }
 
@@ -1663,9 +1673,6 @@ function New-UnattendXml {
     if (-not $xmlArch) {
         $xmlArch = $script:HostArch
         Write-Log "Unattend architecture: using host architecture fallback '$xmlArch'" "WARN"
-    }
-    if (-not $xmlArch) {
-        $xmlArch = $script:HostArch   # fallback: 'amd64' or 'arm64'
     }
 
     # ---- Build specialize Deployment RunSynchronous commands ----
@@ -1798,7 +1805,7 @@ function New-UnattendXml {
 
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <ComputerName>$(if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15).TrimEnd('-') } else { $xmlVMName })</ComputerName>
+      <ComputerName>$($cn = if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15).TrimEnd('-') } else { $xmlVMName }; if ([string]::IsNullOrWhiteSpace($cn)) { $cn = $xmlVMName -replace '[^a-zA-Z0-9]','' }; if ([string]::IsNullOrWhiteSpace($cn)) { $cn = 'VM' }; $cn)</ComputerName>
       <TimeZone>$xmlTimezone</TimeZone>
     </component>
     <component name="Microsoft-Windows-Security-SPP-UX" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -1986,6 +1993,7 @@ function Get-GpuPProviders {
     $list = @()
     foreach ($gpu in $gpus) {
         $friendlyName = $gpu.Name
+        $pnp = $null
         $pciShort = ($gpu.Name -split "#")[1]
         if (-not [string]::IsNullOrWhiteSpace($pciShort) -and $displayDevices) {
             $normalizedPciShort = ($pciShort -replace '[^a-zA-Z0-9]', '').ToLowerInvariant()
@@ -2531,7 +2539,13 @@ $btnBrowseVM.Location = New-Object System.Drawing.Point(365, $rowY)
 $btnBrowseVM.FlatStyle = 'Flat'
 $grpConfig.Controls.Add($btnBrowseVM)
 # Default VM location
-try { $ctrlCreate["VMLocation"].Text = (Get-VMHost).VirtualMachinePath } catch { $ctrlCreate["VMLocation"].Text = "C:\HyperV" }
+try { 
+    $ctrlCreate["VMLocation"].Text = (Get-VMHost).VirtualMachinePath 
+} catch { 
+    $fallbackPath = Join-Path $env:PUBLIC "Hyper-V"
+    $ctrlCreate["VMLocation"].Text = $fallbackPath
+    Write-Log "Using fallback VM location: $fallbackPath" "WARN"
+}
 $rowY += 36
 
 $ctrlCreate["ISOPath"] = New-LabeledControl $grpConfig 12 $rowY "ISO File:" -ControlWidth 240
@@ -2835,45 +2849,53 @@ function Update-VMList {
 
     $vmPanel.SuspendLayout()
     try {
-    $vmPanel.Controls.Clear()
-    $checkboxes = @()
-    $filterText = ""
-    if ($ctrlGPU.ContainsKey("VmSearch") -and $ctrlGPU["VmSearch"]) {
-        $filterText = [string]$ctrlGPU["VmSearch"].Text
-    }
-    $vms = Get-VM -ErrorAction SilentlyContinue
-    if (-not [string]::IsNullOrWhiteSpace($filterText)) {
-        $vms = $vms | Where-Object { $_.Name -match [regex]::Escape($filterText) }
-    }
-    $y = 5
-    foreach ($vm in $vms) {
-        $cb = New-Object System.Windows.Forms.CheckBox
-        $cb.Text     = $vm.Name
-        $cb.AutoSize = $true
-        $cb.Location = New-Object System.Drawing.Point(8, $y)
-        $cb.ForeColor = [System.Drawing.Color]::White
-        if ($script:GpuSelectedVMs.ContainsKey($vm.Name)) {
-            $cb.Checked = [bool]$script:GpuSelectedVMs[$vm.Name]
+        $vmPanel.Controls.Clear()
+        $checkboxes = @()
+        $filterText = ""
+        if ($ctrlGPU.ContainsKey("VmSearch") -and $ctrlGPU["VmSearch"]) {
+            $filterText = [string]$ctrlGPU["VmSearch"].Text
         }
-        $cb.Add_CheckedChanged({
-            if ($this -and $this.Text) {
-                $script:GpuSelectedVMs[$this.Text] = [bool]$this.Checked
-            }
-            if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
-                Update-GpuActionState
-            }
-        })
-        if ($toolTip) {
-            $toolTip.SetToolTip($cb, "Select this VM for GPU driver/adapter update. Selection is preserved while filtering and refreshing.")
+        $allVms = @(Get-VM -ErrorAction SilentlyContinue)
+        $vms = if (-not [string]::IsNullOrWhiteSpace($filterText)) {
+            $allVms | Where-Object { $_.Name -match [regex]::Escape($filterText) }
+        } else {
+            $allVms
         }
-        $vmPanel.Controls.Add($cb)
-        $checkboxes += $cb
-        $y += 26
-    }
-    $ctrlGPU["VMCheckboxes"] = $checkboxes
-    if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
-        Update-GpuActionState
-    }
+
+        # Prune stale entries for VMs that no longer exist
+        $currentVmNames = @($allVms | ForEach-Object { $_.Name })
+        $staleKeys = @($script:GpuSelectedVMs.Keys | Where-Object { $_ -notin $currentVmNames })
+        foreach ($k in $staleKeys) { [void]$script:GpuSelectedVMs.Remove($k) }
+
+        $y = 5
+        foreach ($vm in $vms) {
+            $cb = New-Object System.Windows.Forms.CheckBox
+            $cb.Text     = $vm.Name
+            $cb.AutoSize = $true
+            $cb.Location = New-Object System.Drawing.Point(8, $y)
+            $cb.ForeColor = [System.Drawing.Color]::White
+            if ($script:GpuSelectedVMs.ContainsKey($vm.Name)) {
+                $cb.Checked = [bool]$script:GpuSelectedVMs[$vm.Name]
+            }
+            $cb.Add_CheckedChanged({
+                if ($this -and $this.Text) {
+                    $script:GpuSelectedVMs[$this.Text] = [bool]$this.Checked
+                }
+                if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+                    Update-GpuActionState
+                }
+            })
+            if ($toolTip) {
+                $toolTip.SetToolTip($cb, "Select this VM for GPU driver/adapter update. Selection is preserved while filtering and refreshing.")
+            }
+            $vmPanel.Controls.Add($cb)
+            $checkboxes += $cb
+            $y += 26
+        }
+        $ctrlGPU["VMCheckboxes"] = $checkboxes
+        if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+            Update-GpuActionState
+        }
     } finally {
         $vmPanel.ResumeLayout($true)
     }
@@ -3245,7 +3267,10 @@ function Update-TabLayouts {
         $rightX = if ($singleCreateColumn) { $tabPadding } else { $tabPadding + $leftWidth + $sectionGap }
 
         $grpConfig.Location = New-Object System.Drawing.Point($tabPadding, 18)
-        $grpConfig.Size = New-Object System.Drawing.Size($leftWidth, $grpConfig.Height)
+        # Calculate required height from child controls to avoid clipping
+        $configChildBottom = ($grpConfig.Controls | ForEach-Object { $_.Bottom } | Measure-Object -Maximum).Maximum
+        $configHeight = [Math]::Max(200, $configChildBottom + 14)
+        $grpConfig.Size = New-Object System.Drawing.Size($leftWidth, $configHeight)
 
         $browseRightPad = 12
         $controlGap = 8
@@ -3588,7 +3613,7 @@ $toolTip.AutoPopDelay = 8000
 $toolTip.InitialDelay = 300
 $toolTip.ReshowDelay = 120
 $toolTip.ShowAlways = $true
-$toolTip.SetToolTip($ctrlCreate["VMName"], "Use a short unique VM name (letters, numbers, hyphens only). Underscores are not valid Windows computer names. Cannot start or end with a hyphen.")
+$toolTip.SetToolTip($ctrlCreate["VMName"], "Use a short unique VM name starting with a letter (letters, numbers, hyphens only). Cannot end with a hyphen.")
 $toolTip.SetToolTip($ctrlCreate["ISOPath"], "Windows installation ISO for unattended deployment mode.")
 $toolTip.SetToolTip($ctrlCreate["GoldenParentVHD"], "Parent image used when Golden mode is enabled (differencing disk).")
 $toolTip.SetToolTip($ctrlCreate["CheckpointMode"], "Production/ProductionOnly are recommended over Standard for stable rollback.")
@@ -3786,7 +3811,9 @@ $btnBrowseISO.Add_Click({
 
                 # Auto-suggest VM name from ISO filename
                 if ([string]::IsNullOrWhiteSpace($ctrlCreate["VMName"].Text)) {
-                    $suggestedName = [IO.Path]::GetFileNameWithoutExtension($dlg.FileName) -replace '[^a-zA-Z0-9_-]', ''
+                    $suggestedName = [IO.Path]::GetFileNameWithoutExtension($dlg.FileName) -replace '[^a-zA-Z0-9-]', ''
+                    # Strip leading non-letter chars so the name passes '^[a-zA-Z]...' validation
+                    $suggestedName = $suggestedName -replace '^[^a-zA-Z]+', ''
                     if ($suggestedName.Length -gt 15) { $suggestedName = $suggestedName.Substring(0, 15).TrimEnd('-') }
                     # Avoid suggesting a name that conflicts with an existing VM
                     if ($suggestedName -and (Get-VM -Name $suggestedName -ErrorAction SilentlyContinue)) {
@@ -3904,7 +3931,7 @@ function Update-CreateValidationHint {
     $useGolden = ($ctrlCreate.ContainsKey("GoldenImage") -and $ctrlCreate["GoldenImage"] -and $ctrlCreate["GoldenImage"].Checked)
     $goldenPath = if ($ctrlCreate.ContainsKey("GoldenParentVHD") -and $ctrlCreate["GoldenParentVHD"]) { [string]$ctrlCreate["GoldenParentVHD"].Text } else { "" }
 
-    $nameOk = (-not [string]::IsNullOrWhiteSpace($vmName)) -and ($vmName -match '^[a-zA-Z0-9-]+$') -and ($vmName -notmatch '^-|-$') -and ($vmName.Length -le 64)
+    $nameOk = (-not [string]::IsNullOrWhiteSpace($vmName)) -and ($vmName -match '^[a-zA-Z][a-zA-Z0-9-]*$') -and ($vmName -notmatch '-$') -and ($vmName.Length -le 64)
     $sourceOk = if ($useGolden) {
         -not [string]::IsNullOrWhiteSpace($goldenPath) -and (Test-PathCached $goldenPath)
     } else {
@@ -4176,6 +4203,7 @@ $btnCreateVM.Add_Click({
     if ($confirmResult -ne [System.Windows.Forms.DialogResult]::OK) { return }
 
     $script:IsCreating = $true
+    $validationError = $null
 
     $VMName = ""
     $VMLoc = ""
@@ -4190,6 +4218,9 @@ $btnCreateVM.Add_Click({
     $UnattendXMLPath = $null
 
     try {
+        # Wrap the entire validation and creation logic in a nested try-catch
+        # so we can handle early exits without skipping cleanup
+        try {
         Update-CreateProgress -Percent 2 -Status "Validating VM settings..."
 
         # ---- Gather inputs ----
@@ -4269,18 +4300,19 @@ $btnCreateVM.Add_Click({
         }
 
         # ---- Validate ----
-        if ([string]::IsNullOrWhiteSpace($VMName)) { Write-Log "VM Name is required!" "ERROR"; return }
-        if ($VMName -notmatch '^[a-zA-Z0-9-]+$') { Write-Log "VM Name contains invalid characters. Use only letters, numbers, and hyphens (underscores are not valid Windows computer names)." "ERROR"; return }
-        if ($VMName -match '^-|-$') { Write-Log "VM Name cannot start or end with a hyphen." "ERROR"; return }
-        if ($VMName.Length -gt 64) { Write-Log "VM Name must be 64 characters or less." "ERROR"; return }
+        if ([string]::IsNullOrWhiteSpace($VMName)) { throw "VM Name is required!" }
+        if ($VMName -notmatch '^[a-zA-Z][a-zA-Z0-9-]*$') { 
+            throw "VM Name must start with a letter and contain only letters, numbers, and hyphens."
+        }
+        if ($VMName -match '-$') { throw "VM Name cannot end with a hyphen." }
+        if ($VMName.Length -gt 64) { throw "VM Name must be 64 characters or less." }
         if ($VMName.Length -gt 15) { Write-Log "VM Name is longer than 15 characters. This is valid for Hyper-V, but may reduce compatibility with legacy NetBIOS-dependent workflows." "WARN" }
-        if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) { Write-Log "A VM named '$VMName' already exists!" "ERROR"; return }
+        if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) { throw "A VM named '$VMName' already exists!" }
 
         if (-not $UseGoldenImage) {
-            if ([string]::IsNullOrWhiteSpace($ISOPath) -or -not (Test-Path $ISOPath)) { Write-Log "Valid ISO file is required." "ERROR"; return }
+            if ([string]::IsNullOrWhiteSpace($ISOPath) -or -not (Test-Path $ISOPath)) { throw "Valid ISO file is required." }
             if (-not $script:MountedISO -or [string]::IsNullOrWhiteSpace($script:MountedISO.ImagePath)) {
-                Write-Log "Selected ISO is not mounted. Please re-select the ISO before creating the VM." "ERROR"
-                return
+                throw "Selected ISO is not mounted. Please re-select the ISO before creating the VM."
             }
             $mountedIsoPath = [string]$script:MountedISO.ImagePath
             $isoMatch = $false
@@ -4292,13 +4324,11 @@ $btnCreateVM.Add_Click({
                 $isoMatch = ($mountedIsoPath.Trim().ToLowerInvariant() -eq $ISOPath.Trim().ToLowerInvariant())
             }
             if (-not $isoMatch) {
-                Write-Log "Selected ISO does not match the currently mounted image. Re-select the ISO to refresh source metadata." "ERROR"
-                return
+                throw "Selected ISO does not match the currently mounted image. Re-select the ISO to refresh source metadata."
             }
         } else {
             if ([string]::IsNullOrWhiteSpace($GoldenParentVHD) -or -not (Test-Path $GoldenParentVHD)) {
-                Write-Log "Golden Image mode is enabled. Please select a valid parent VHDX/VHD." "ERROR"
-                return
+                throw "Golden Image mode is enabled. Please select a valid parent VHDX/VHD."
             }
         }
 
@@ -4307,11 +4337,10 @@ $btnCreateVM.Add_Click({
             try {
                 New-Item -Path $VMLocBase -ItemType Directory -Force -ErrorAction Stop | Out-Null
             } catch {
-                Write-Log "Failed to create VM location: $($PSItem.Exception.Message)" "ERROR"
-                return
+                throw "Failed to create VM location: $($PSItem.Exception.Message)"
             }
         }
-        if (-not (Test-DirectoryWritable -Path $VMLocBase)) { Write-Log "VM Location is not writable: $VMLocBase" "ERROR"; return }
+        if (-not (Test-DirectoryWritable -Path $VMLocBase)) { throw "VM Location is not writable: $VMLocBase" }
 
         if ($UseGoldenImage) {
             # Golden mode creates only a differencing disk at this stage.
@@ -4334,33 +4363,30 @@ $btnCreateVM.Add_Click({
         }
         $freeDiskGB = Get-PathAvailableSpaceGB -Path $VMLocBase
         if ($freeDiskGB -ge 0 -and $freeDiskGB -lt $requiredDiskGB) {
-            Write-Log "Insufficient disk space in VM location. Need about $requiredDiskGB GB free, found $freeDiskGB GB." "ERROR"
-            return
+            throw "Insufficient disk space in VM location. Need about $requiredDiskGB GB free, found $freeDiskGB GB."
         }
 
         if (-not $UseGoldenImage) {
-            if (-not $script:WimFile -or -not (Test-Path $script:WimFile)) { Write-Log "No WIM/ESD file found. Please select an ISO first." "ERROR"; return }
+            if (-not $script:WimFile -or -not (Test-Path $script:WimFile)) { throw "No WIM/ESD file found. Please select an ISO first." }
         }
         if (-not $UseGoldenImage) {
-            if ([string]::IsNullOrWhiteSpace($Username)) { Write-Log "Username is required!" "ERROR"; return }
-            if ($Username -notmatch '^[a-zA-Z0-9]+$') { Write-Log "Username cannot contain special characters." "ERROR"; return }
-            if ($Username -ieq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
-            if ([string]::IsNullOrWhiteSpace($PasswordText)) { Write-Log "Password is required for unattended setup." "ERROR"; return }
+            if ([string]::IsNullOrWhiteSpace($Username)) { throw "Username is required!" }
+            if ($Username -notmatch '^[a-zA-Z0-9]+$') { throw "Username cannot contain special characters." }
+            if ($Username -ieq $VMName) { throw "Username cannot be the same as VM Name (causes admin permission issues in the VM)." }
+            if ([string]::IsNullOrWhiteSpace($PasswordText)) { throw "Password is required for unattended setup." }
+            # Convert password immediately to minimize plaintext lifetime
             $Password = Convert-PlainTextToSecureString -Text $PasswordText
-            $PasswordText = $null   # Minimize plaintext password lifetime in memory
+            $PasswordText = $null   # Clear plaintext immediately
         }
         if ($EnableDynamicMem) {
             if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
-                Write-Log "Dynamic Memory minimum cannot be greater than maximum." "ERROR"
-                return
+                throw "Dynamic Memory minimum ($DynamicMemMinGB GB) cannot be greater than maximum ($DynamicMemMaxGB GB)."
             }
             if ($DynamicMemMinGB -gt $MemGB) {
-                Write-Log "Dynamic Memory minimum cannot be greater than startup memory." "ERROR"
-                return
+                throw "Dynamic Memory minimum ($DynamicMemMinGB GB) cannot be greater than startup memory ($MemGB GB)."
             }
             if ($DynamicMemMaxGB -lt $MemGB) {
-                Write-Log "Dynamic Memory maximum cannot be less than startup memory." "ERROR"
-                return
+                throw "Dynamic Memory maximum ($DynamicMemMaxGB GB) cannot be less than startup memory ($MemGB GB)."
             }
         }
 
@@ -4368,15 +4394,13 @@ $btnCreateVM.Add_Click({
             # selected switch is valid
         } else {
             if (-not $AutoCreateSwitch) {
-                if (-not $VMSwitch) { Write-Log "No Virtual Switch selected!" "ERROR" }
-                else { Write-Log "Selected Virtual Switch no longer exists: $VMSwitch" "ERROR" }
-                return
+                if (-not $VMSwitch) { throw "No Virtual Switch selected!" }
+                else { throw "Selected Virtual Switch no longer exists: $VMSwitch" }
             }
 
             $createdSwitch = Set-ToolkitNatSwitch
             if (-not $createdSwitch) {
-                Write-Log "Could not auto-create a fallback virtual switch." "ERROR"
-                return
+                throw "Could not auto-create a fallback virtual switch."
             }
 
             $VMSwitch = $createdSwitch
@@ -4385,7 +4409,7 @@ $btnCreateVM.Add_Click({
             $ctrlCreate["Switch"].SelectedItem = $VMSwitch
         }
 
-        if (-not $UseGoldenImage -and ($null -eq $SelectedIndex -or $SelectedIndex -lt 1)) { Write-Log "No Windows Edition selected!" "ERROR"; return }
+        if (-not $UseGoldenImage -and ($null -eq $SelectedIndex -or $SelectedIndex -lt 1)) { throw "No Windows Edition selected!" }
 
         $hostSupportedVersions = "Unavailable"
         try {
@@ -4885,8 +4909,18 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             }
 
             Write-Log "Creating differencing VHDX from parent: $GoldenParentVHD"
-            New-VHD -Path $VHDPath -ParentPath $GoldenParentVHD -Differencing | Out-Null
-            Write-Log "Golden image differencing disk created." "OK"
+            try {
+                # Validate parent VHD accessibility and format
+                $parentVhd = Get-VHD -Path $GoldenParentVHD
+                if ($parentVhd.VhdFormat -eq 'VHD' -and $parentVhd.Size -gt 127GB) {
+                    throw "Parent VHD exceeds 127GB limit for VHD format. Use VHDX or smaller VHD."
+                }
+                
+                New-VHD -Path $VHDPath -ParentPath $GoldenParentVHD -Differencing -ErrorAction Stop | Out-Null
+                Write-Log "Golden image differencing disk created." "OK"
+            } catch {
+                throw "Failed to create differencing VHDX: $($_.Exception.Message)"
+            }
             Write-Log "WARNING: Golden Image mode cannot auto-detect the guest OS version." "WARN"
             Write-Log "  - Secure Boot / TPM settings use your selections; verify they match the parent image OS." "WARN"
             Write-Log "  - If the parent is Windows 11, ensure Secure Boot and TPM are both enabled." "WARN"
@@ -4957,14 +4991,27 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Write-Log "  Secure Boot was requested but template configuration could not be fully applied. Verify firmware settings in the VM manually." "WARN"
         }
 
-        # TPM
+        # TPM with enhanced validation
         if ($EnableTPM) {
             try {
+                # Verify host TPM capability before enabling
+                $tpmInfo = Get-Tpm -ErrorAction SilentlyContinue
+                if (-not $tpmInfo -or -not $tpmInfo.TpmPresent) {
+                    Write-Log "  WARNING: Host TPM not detected. Virtual TPM may not function properly." "WARN"
+                }
+                
                 Set-VMKeyProtector -VMName $VMName -NewLocalKeyProtector -ErrorAction Stop
                 Enable-VMTPM -VMName $VMName -ErrorAction Stop
                 Write-Log "  Virtual TPM: Enabled" "OK"
+                
+                if ($IsWin11) {
+                    Write-Log "  TPM 2.0 enabled for Windows 11 compatibility" "INFO"
+                }
             } catch {
                 Write-Log "  TPM setup failed: $($_.Exception.Message)" "WARN"
+                if ($IsWin11) {
+                    Write-Log "  WARNING: Windows 11 installation may fail without TPM" "WARN"
+                }
             }
         }
 
@@ -5075,8 +5122,19 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
 
         Write-Log "========================================" "OK"
-        Write-Log "VM '$VMName' creation completed!" "OK"
+        Write-Log "VM '$VMName' creation completed successfully!" "OK"
         Write-Log "========================================" "OK"
+        
+        # Summary of VM configuration
+        Write-Log "VM Configuration Summary:" "INFO"
+        Write-Log "  Name: $VMName" "INFO"
+        Write-Log "  Location: $VMLoc" "INFO"
+        Write-Log "  Memory: $MemGB GB" "INFO"
+        Write-Log "  Disk: $DiskGB GB" "INFO"
+        Write-Log "  OS Type: $(if ($UseGoldenImage) { 'Golden Image' } else { $script:DetectedWinVersion })" "INFO"
+        Write-Log "  TPM: $(if ($EnableTPM) { 'Enabled' } else { 'Disabled' })" "INFO"
+        Write-Log "  Secure Boot: $(if ($EnableSecureBoot) { 'Enabled' } else { 'Disabled' })" "INFO"
+        
         Update-CreateProgress -Percent 100 -Status "VM creation completed successfully"
 
         # Refresh GPU tab VM list
@@ -5084,12 +5142,24 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
         $rollbackNeeded = $false
 
-    } catch {
-        Update-CreateProgress -Percent 0 -Status "VM creation failed"
-        Write-ErrorWithGuidance -Context "Create VM ($VMName)" -ErrorRecord $_
-        Write-Log "Stack: $($_.ScriptStackTrace)" "ERROR"
-        if ($rollbackNeeded) {
-            Remove-PartialVmArtifacts -VMName $VMName -VMLoc $VMLoc -VHDPath $VHDPath -RemoveVmFolder $vmFolderCreatedByScript
+        } catch {
+            # Handle validation errors vs other unexpected errors
+            $errorMessage = $_.Exception.Message
+            # Match all user-facing validation throws (prefixes of throw messages in the validation section)
+            $isValidation = $errorMessage -match '^(VM Name|VM Location|Valid ISO|Selected ISO|Golden Image|Insufficient disk|No WIM|No Virtual Switch|Selected Virtual Switch|Could not auto-create|No Windows Edition|Username|Password|Dynamic Memory|Failed to create VM location|A VM named)'
+            if ($isValidation) {
+                # This is a validation error - show user-friendly message
+                $validationError = $errorMessage
+                Write-Log $errorMessage "ERROR"
+            } else {
+                # This is an unexpected error during validation or VM creation
+                Update-CreateProgress -Percent 0 -Status "VM creation failed"
+                Write-ErrorWithGuidance -Context "Create VM ($VMName)" -ErrorRecord $_
+                Write-Log "Stack: $($_.ScriptStackTrace)" "ERROR"
+                if ($rollbackNeeded) {
+                    Remove-PartialVmArtifacts -VMName $VMName -VMLoc $VMLoc -VHDPath $VHDPath -RemoveVmFolder $vmFolderCreatedByScript
+                }
+            }
         }
     } finally {
         foreach ($artifact in @($UnattendXMLPath, $cmdFile, $tempExe)) {
@@ -5110,13 +5180,26 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
         # Dispose SecureString password if still alive (e.g. golden mode or early exception)
         if ($Password) {
-            try { $Password.Dispose() } catch { }
+            try { 
+                $Password.Dispose() 
+            } catch { 
+                Write-Log "Password disposal warning: $($_.Exception.Message)" "WARN"
+            }
             $Password = $null
         }
         $PasswordText = $null
         $script:IsCreating = $false
         $tabControl.Enabled  = $true
         [void](Update-CreateValidationHint)
+        
+        # Show validation error to user if one occurred
+        if ($validationError) {
+            [System.Windows.Forms.MessageBox]::Show(
+                $validationError,
+                "Validation Error", 
+                [System.Windows.Forms.MessageBoxButtons]::OK, 
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+        }
     }
 })
 

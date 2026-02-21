@@ -5648,6 +5648,9 @@ assign letter=$freeLetter
                 }
                 
                 New-VHD -Path $VHDPath -ParentPath $GoldenParentVHD -Differencing -ErrorAction Stop | Out-Null
+                if (-not (Test-Path $VHDPath)) {
+                    throw "Differencing VHDX was not found after creation at '$VHDPath'."
+                }
                 Write-Log "Golden image differencing disk created." "OK"
             } catch {
                 throw "Failed to create differencing VHDX: $($_.Exception.Message)"
@@ -5656,11 +5659,32 @@ assign letter=$freeLetter
             Write-Log "  - Secure Boot / TPM settings use your selections; verify they match the parent image OS." "WARN"
             Write-Log "  - If the parent is Windows 11, ensure Secure Boot and TPM are both enabled." "WARN"
             # Attempt lightweight OS detection from parent VHD to warn about mismatched settings
+            $goldenHiveLoaded = $false
+            $goldenParentMounted = $false
+            $regExe = Join-Path $env:WINDIR 'System32\reg.exe'
+            if (-not (Test-Path $regExe)) { $regExe = 'reg.exe' }
             try {
-                $parentMounted = Mount-VHD -Path $GoldenParentVHD -ReadOnly -Passthru -ErrorAction Stop
-                Register-TrackedMountedImage -ImagePath $GoldenParentVHD
+                $parentMounted = $null
+                for ($mountTry = 1; $mountTry -le 3; $mountTry++) {
+                    try {
+                        $parentMounted = Mount-VHD -Path $GoldenParentVHD -ReadOnly -Passthru -ErrorAction Stop
+                        Register-TrackedMountedImage -ImagePath $GoldenParentVHD
+                        $goldenParentMounted = $true
+                        if (Wait-ImageDetached -ImagePath $GoldenParentVHD -TimeoutSec 1) {
+                            throw "Parent VHD did not remain attached after mount attempt."
+                        }
+                        break
+                    } catch {
+                        if ($mountTry -lt 3) {
+                            Write-Log "Golden parent mount retry ${mountTry}/3 failed: $($_.Exception.Message)" "WARN"
+                            Start-Sleep -Seconds (2 * $mountTry)
+                        } else {
+                            throw
+                        }
+                    }
+                }
+
                 $parentDisk = $parentMounted | Get-Disk -ErrorAction SilentlyContinue
-                $goldenHiveLoaded = $false
                 if ($parentDisk) {
                     $parentParts = Get-DataPartitions -DiskNumber $parentDisk.Number
                     foreach ($pp in $parentParts) {
@@ -5669,7 +5693,7 @@ assign letter=$freeLetter
                             $regPath = "$($pVol.DriveLetter):\Windows\System32\config\SOFTWARE"
                             if (Test-Path $regPath) {
                                 try {
-                                    reg load "HKU\__golden_detect" $regPath 2>&1 | Out-Null
+                                    & $regExe load "HKU\__golden_detect" $regPath 2>&1 | Out-Null
                                     if ($LASTEXITCODE -ne 0) { throw "reg load failed with code $LASTEXITCODE" }
                                     $goldenHiveLoaded = $true
                                     $goldenBuild = (Get-ItemProperty -Path 'Registry::HKU\__golden_detect\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuild' -ErrorAction SilentlyContinue).CurrentBuild
@@ -5684,7 +5708,7 @@ assign letter=$freeLetter
                                     Write-Log "Golden parent build detection warning: $($_.Exception.Message)" "WARN"
                                 } finally {
                                     if ($goldenHiveLoaded) {
-                                        reg unload "HKU\__golden_detect" 2>&1 | Out-Null
+                                        & $regExe unload "HKU\__golden_detect" 2>&1 | Out-Null
                                         $goldenHiveLoaded = $false
                                     }
                                 }
@@ -5693,15 +5717,29 @@ assign letter=$freeLetter
                         }
                     }
                 }
-                Dismount-VHD -Path $GoldenParentVHD -ErrorAction SilentlyContinue
-                Unregister-TrackedMountedImage -ImagePath $GoldenParentVHD
             } catch {
                 Write-Log "Could not auto-detect golden parent OS (non-critical): $($_.Exception.Message)" "WARN"
-                try {
-                    Dismount-VHD -Path $GoldenParentVHD -ErrorAction SilentlyContinue
+            } finally {
+                if ($goldenHiveLoaded) {
+                    try {
+                        & $regExe unload "HKU\__golden_detect" 2>&1 | Out-Null
+                        $goldenHiveLoaded = $false
+                    } catch {
+                        Write-Log "Golden detect hive unload warning: $($_.Exception.Message)" "WARN"
+                    }
+                }
+                if ($goldenParentMounted) {
+                    if (-not (Dismount-ImageRetry -ImagePath $GoldenParentVHD -MaxRetries 3)) {
+                        try {
+                            Dismount-VHD -Path $GoldenParentVHD -ErrorAction SilentlyContinue
+                            if (-not (Wait-ImageDetached -ImagePath $GoldenParentVHD -TimeoutSec 12)) {
+                                Write-Log "Golden parent VHD still appears attached after fallback dismount." "WARN"
+                            }
+                        } catch {
+                            Write-Log "Golden parent cleanup warning: $($_.Exception.Message)" "WARN"
+                        }
+                    }
                     Unregister-TrackedMountedImage -ImagePath $GoldenParentVHD
-                } catch {
-                    Write-Log "Golden parent cleanup warning: $($_.Exception.Message)" "WARN"
                 }
             }
         }
@@ -6384,8 +6422,8 @@ $btnUpdateGPU.Add_Click({
 
 # ---- Form Closing Cleanup ----
 $form.Add_FormClosing({
-    param($formSender, $e)
-    [void]$formSender
+    param($eventSource, $e)
+    [void]$eventSource
     # Warn if a long-running operation is still in progress
     if ($script:IsCreating -or $script:IsUpdatingGPU) {
         $closeConfirm = [System.Windows.Forms.MessageBox]::Show(

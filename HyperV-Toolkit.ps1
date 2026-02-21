@@ -1348,7 +1348,7 @@ function Set-GpuPartitionForVM {
 
 # ---- Main Form ----
 $form = New-Object System.Windows.Forms.Form
-$form.Text              = "Hyper-V Toolkit • Version 1 • Diobyte • Made with love"
+$form.Text              = "Hyper-V Toolkit - Version 1 - Diobyte - Made with love"
 $form.Size              = New-Object System.Drawing.Size(1300, 860)
 $form.MinimumSize       = New-Object System.Drawing.Size(1240, 820)
 $form.FormBorderStyle   = 'Sizable'
@@ -1380,7 +1380,7 @@ $theme = @{
 # ---- Tab Control ----
 $tabControl            = New-Object System.Windows.Forms.TabControl
 $tabControl.Location   = New-Object System.Drawing.Point(10, 8)
-$tabControl.Size       = New-Object System.Drawing.Size(1205, 490)
+$tabControl.Size       = New-Object System.Drawing.Size(1205, 560)
 $tabControl.Font       = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
 $tabControl.DrawMode   = [System.Windows.Forms.TabDrawMode]::OwnerDrawFixed
 $tabControl.ItemSize   = New-Object System.Drawing.Size(150, 32)
@@ -1469,7 +1469,7 @@ function New-LabeledControl {
 
 # --- Left Column: VM Configuration ---
 $grpConfig           = New-Object System.Windows.Forms.GroupBox
-$grpConfig.Text      = "VM Configuration • Core Settings"
+$grpConfig.Text      = "VM Configuration - Core Settings"
 $grpConfig.ForeColor = $theme.Text
 $grpConfig.Location  = New-Object System.Drawing.Point(8, 18)
 $grpConfig.Size      = New-Object System.Drawing.Size(460, 445)
@@ -1578,7 +1578,7 @@ $ctrlCreate["DynamicMemMax"] = New-LabeledControl $grpConfig 12 $rowY "Dynamic M
 
 # GroupBox: Boot & Hardware
 $grpBoot           = New-Object System.Windows.Forms.GroupBox
-$grpBoot.Text      = "Boot && Hardware • Security"
+$grpBoot.Text      = "Boot && Hardware - Security"
 $grpBoot.ForeColor = [System.Drawing.Color]::White
 $grpBoot.Location  = New-Object System.Drawing.Point(478, 18)
 $grpBoot.Size      = New-Object System.Drawing.Size(350, 105)
@@ -1610,7 +1610,7 @@ $grpBoot.Controls.Add($ctrlCreate["VHDType"])
 
 # GroupBox: VM Options
 $grpOpts           = New-Object System.Windows.Forms.GroupBox
-$grpOpts.Text      = "VM Options • Runtime"
+$grpOpts.Text      = "VM Options - Runtime"
 $grpOpts.ForeColor = [System.Drawing.Color]::White
 $grpOpts.Location  = New-Object System.Drawing.Point(478, 128)
 $grpOpts.Size      = New-Object System.Drawing.Size(350, 134)
@@ -1684,7 +1684,7 @@ $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
 # Create VM Button
 $btnCreateVM           = New-Object System.Windows.Forms.Button
-$btnCreateVM.Text      = "Create VM  →"
+$btnCreateVM.Text      = "Create VM"
 $btnCreateVM.Size      = New-Object System.Drawing.Size(140, 36)
 $btnCreateVM.Location  = New-Object System.Drawing.Point(540, 448)
 $btnCreateVM.FlatStyle = 'Flat'
@@ -1950,7 +1950,7 @@ $grpGPUOpts.Controls.Add($ctrlGPU["CopySvcDriver"])
 
 # Update GPU Button
 $btnUpdateGPU           = New-Object System.Windows.Forms.Button
-$btnUpdateGPU.Text      = "Update GPU Drivers  →"
+$btnUpdateGPU.Text      = "Update GPU Drivers"
 $btnUpdateGPU.Size      = New-Object System.Drawing.Size(160, 36)
 $btnUpdateGPU.Location  = New-Object System.Drawing.Point(540, 448)
 $btnUpdateGPU.FlatStyle = 'Flat'
@@ -2030,14 +2030,14 @@ function Update-MainLayout {
     $buttonStackGap = 35
 
     $tabWidth = [Math]::Max(900, $RootForm.ClientSize.Width - 2 * $margin)
-    $tabHeight = [Math]::Max(490, [Math]::Min(560, $RootForm.ClientSize.Height - 300))
+    $tabHeight = [Math]::Max(550, [Math]::Min(620, $RootForm.ClientSize.Height - 260))
     $tabControl.Location = New-Object System.Drawing.Point($margin, 8)
     $tabControl.Size = New-Object System.Drawing.Size($tabWidth, $tabHeight)
 
-    $logY = $tabControl.Bottom + 7
+    $logY = $tabControl.Bottom + 12
     $buttonX = [Math]::Max($margin + 600, $RootForm.ClientSize.Width - $rightButtonColWidth - $margin)
     $logWidth = [Math]::Max(500, $buttonX - $margin - $rightButtonGap)
-    $logHeight = [Math]::Max(120, $RootForm.ClientSize.Height - $logY - $margin)
+    $logHeight = [Math]::Max(100, $RootForm.ClientSize.Height - $logY - $margin)
 
     $script:LogBox.Location = New-Object System.Drawing.Point($margin, $logY)
     $script:LogBox.Size = New-Object System.Drawing.Size($logWidth, $logHeight)
@@ -2434,7 +2434,7 @@ $btnCreateVM.Add_Click({
         $ResWidth = 1920; $ResHeight = 1080
         $raw = $ctrlCreate["Resolution"].SelectedItem
         if ($raw) {
-            $m = [regex]::Match([string]$raw, '^(\d+)\s*[xX×]\s*(\d+)$')
+            $m = [regex]::Match([string]$raw, '^(\d+)\s*[xX\u00D7]\s*(\d+)$')
             if ($m.Success) { $ResWidth = [int]$m.Groups[1].Value; $ResHeight = [int]$m.Groups[2].Value }
         }
 

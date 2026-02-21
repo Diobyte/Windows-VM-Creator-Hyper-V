@@ -5307,22 +5307,42 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Update-CreateProgress -Percent 48 -Status "Applying Windows image (this can take a while)..."
             Write-Log "Applying Windows image (Edition: $SelectedEdition, Index: $SelectedIndex)..."
         Write-Log "This may take several minutes..."
-        Invoke-DismApplyImage -ImageFile $script:WimFile -Index $SelectedIndex -ApplyDir $driveLetter -PreferCompactApply $guestProfile.PreferCompactApply
+        # Trailing backslash is required: 'E:' targets 'current dir on E' vs 'E:\' targets the root.
+        # Microsoft docs always use the trailing form (e.g., W:\) for /ApplyDir.
+        $applyDirRoot = $driveLetter + "\"
+        Invoke-DismApplyImage -ImageFile $script:WimFile -Index $SelectedIndex -ApplyDir $applyDirRoot -PreferCompactApply $guestProfile.PreferCompactApply
         Write-Log "Windows image applied." "OK"
 
         # ---- Inject files into VHD ----
-        # Unattend to root
+        # For an offline DISM deploy (no setup.exe), Windows performs a "mini-setup"
+        # on first boot (specialize + oobeSystem passes).  The implicit answer file
+        # search order that matters here is:
+        #   Priority 2: %WINDIR%\Panther\Unattend  (downlevel only — may NOT be searched)
+        #   Priority 3: %WINDIR%\Panther            (cached — MOST RELIABLE for offline deploy)
+        #   Priority 6: %WINDIR%\System32\Sysprep
+        #   Priority 7: %SYSTEMDRIVE% root
+        # We place the file in ALL locations so it is found regardless of which
+        # search paths Windows evaluates on first boot.
+
+        # Unattend to root of Windows drive (priority 7)
         Copy-Item -Path $UnattendXMLPath -Destination (Join-Path "$driveLetter\" "Autounattend.xml") -Force
-        # Unattend to Panther
-        $PantherDir = Join-Path "$driveLetter\Windows" "Panther\Unattend"
-        New-Item -Path $PantherDir -ItemType Directory -Force | Out-Null
-        Copy-Item -Path $UnattendXMLPath -Destination (Join-Path $PantherDir "Unattend.xml") -Force
-        # Also to Sysprep for maximum compatibility
+
+        # Unattend directly into Panther (priority 3 — highest reliable priority)
+        $PantherDirDirect = Join-Path "$driveLetter\Windows" "Panther"
+        New-Item -Path $PantherDirDirect -ItemType Directory -Force | Out-Null
+        Copy-Item -Path $UnattendXMLPath -Destination (Join-Path $PantherDirDirect "Unattend.xml") -Force
+
+        # Unattend into Panther\Unattend subdirectory (priority 2 — downlevel fallback)
+        $PantherSubDir = Join-Path $PantherDirDirect "Unattend"
+        New-Item -Path $PantherSubDir -ItemType Directory -Force | Out-Null
+        Copy-Item -Path $UnattendXMLPath -Destination (Join-Path $PantherSubDir "Unattend.xml") -Force
+
+        # Also to Sysprep for maximum compatibility (priority 6)
         $SysprepDir = Join-Path "$driveLetter\Windows\System32" "Sysprep"
         if (Test-Path $SysprepDir) {
             Copy-Item -Path $UnattendXMLPath -Destination (Join-Path $SysprepDir "Unattend.xml") -Force
         }
-        Write-Log "Autounattend.xml injected (root + Panther + Sysprep)" "OK"
+        Write-Log "Unattend.xml injected (Panther, Panther\Unattend, Sysprep, root)" "OK"
 
         # QRes.exe
         $QresDestDir = Join-Path "$driveLetter\" "Windows\Temp"
@@ -5529,6 +5549,30 @@ assign letter=$freeLetter
             }
         }
 
+        # ---- Always create UEFI fallback boot file ----
+        # bcdboot with /s writes \EFI\Microsoft\Boot\ but does NOT create the
+        # standard UEFI fallback path \EFI\Boot\bootx64.efi (or bootaa64.efi).
+        # Because we run bcdboot offline (no VM NVRAM to write), the Hyper-V Gen 2
+        # firmware may not find the boot entry without this fallback file.
+        # Per UEFI 2.3.1 spec, firmware looks for \EFI\Boot\boot<arch>.efi when
+        # no explicit NVRAM entry exists.
+        if ($bootSuccess -and (Test-Path $bootmgrEfi)) {
+            try {
+                $efiFallbackDir = Join-Path $efiDrive "EFI\Boot"
+                New-Item -Path $efiFallbackDir -ItemType Directory -Force | Out-Null
+                $fallbackName = if ($script:HostArch -eq 'arm64') { 'bootaa64.efi' } else { 'bootx64.efi' }
+                $fallbackPath = Join-Path $efiFallbackDir $fallbackName
+                if (-not (Test-Path $fallbackPath)) {
+                    Copy-Item -Path $bootmgrEfi -Destination $fallbackPath -Force
+                    Write-Log "Created UEFI fallback boot file: $fallbackPath" "OK"
+                } else {
+                    Write-Log "UEFI fallback boot file already exists: $fallbackPath" "OK"
+                }
+            } catch {
+                Write-Log "Failed to create UEFI fallback boot file: $($_.Exception.Message)" "WARN"
+            }
+        }
+
         # Attempt 4 (last resort): Manually copy boot files from the applied Windows image
         if (-not $bootSuccess) {
             Write-Log "Attempting manual boot file copy as last resort..." "WARN"
@@ -5582,6 +5626,36 @@ assign letter=$freeLetter
                 $cleanupPart = if ($efiRefreshed) { $efiRefreshed } else { $efi }
                 $cleanupPart | Remove-PartitionAccessPath -AccessPath $efiDrive -ErrorAction SilentlyContinue
             } catch { }
+        }
+
+        # ---- Configure Windows Recovery Environment ----
+        # Per Microsoft deployment docs, Winre.wim should be registered so that
+        # Windows Update and recovery boot work correctly.  Since we don't create
+        # a separate Recovery partition (Gen 2 Hyper-V VMs can re-download from
+        # Windows Update), we register WinRE on the Windows partition itself.
+        try {
+            $winreSource = Join-Path "$driveLetter\Windows\System32\Recovery" "Winre.wim"
+            if (Test-Path $winreSource) {
+                $winreTargetDir = Join-Path "$driveLetter\" "Recovery\WindowsRE"
+                New-Item -Path $winreTargetDir -ItemType Directory -Force | Out-Null
+                Copy-Item -Path $winreSource -Destination (Join-Path $winreTargetDir "Winre.wim") -Force
+                # Register recovery image with ReAgentC (uses the image's own copy)
+                $reagentc = Join-Path "$driveLetter\Windows\System32" "ReAgentC.exe"
+                if (Test-Path $reagentc) {
+                    $reagentResult = & $reagentc /setreimage /path "$winreTargetDir" /target "$driveLetter\Windows" 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Log "Windows Recovery Environment registered." "OK"
+                    } else {
+                        Write-Log "ReAgentC returned code $LASTEXITCODE (non-fatal): $($reagentResult | Out-String)" "WARN"
+                    }
+                } else {
+                    Write-Log "ReAgentC.exe not found in image; WinRE copied but not registered." "WARN"
+                }
+            } else {
+                Write-Log "Winre.wim not found in applied image (non-fatal, Windows Update can fetch recovery later)." "WARN"
+            }
+        } catch {
+            Write-Log "WinRE setup warning (non-fatal): $($_.Exception.Message)" "WARN"
         }
 
             if (-not $bootSuccess) {

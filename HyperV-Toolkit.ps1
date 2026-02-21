@@ -349,7 +349,7 @@ $script:DoEventsWarningLogged = $false # One-time guard for DoEvents warning log
 $script:LastLogRefresh      = [DateTime]::MinValue  # Rate-limit LogBox.Refresh()
 $script:LogRefreshIntervalMs = 100                  # Minimum ms between log repaints
 $script:LogMaxLength        = 200000                # Trim log when exceeding ~200KB
-$script:PathCache           = @{}                   # Test-Path cache: path â†’ [result, DateTime]
+$script:PathCache           = @{}                   # Test-Path cache: path -> [result, DateTime]
 $script:PathCacheTtlMs      = 5000                  # Cache TTL for Test-PathCached (5s to reduce I/O on slow paths)
 $script:NvidiaDllPatterns   = @('nv_*.dll','nvapi*.dll','nvcu*.dll','nvcuda*.dll',
                                 'nvenc*.dll','nvfbc*.dll','nvml*.dll','nvopt*.dll',
@@ -1366,7 +1366,7 @@ function Get-DriverVersionBranch {
     try {
         $segments = $VersionString.Split('.')
         # NVIDIA Windows driver versions use 4 segments: Major.Minor.Branch.Build
-        # e.g. 32.0.15.7275 â€” the 3rd segment (index 2) is the meaningful branch.
+        # e.g. 32.0.15.7275 - the 3rd segment (index 2) is the meaningful branch.
         if ($segments.Count -ge 4) { return [int]$segments[2] }
         if ($segments.Count -ge 1) { return [int]$segments[0] }
         return -1
@@ -2224,7 +2224,7 @@ function Get-GpuDriverStoreFolders {
                     ForEach-Object { $folders.Add($_) }
             }
         }
-        # GPU-related audio drivers (HDMI/DP audio) â€” exclude generic Realtek/Conexant HD Audio
+        # GPU-related audio drivers (HDMI/DP audio) - exclude generic Realtek/Conexant HD Audio
         $audioDevs = Get-PnpDevice -Class MEDIA -Status OK -ErrorAction SilentlyContinue |
             Where-Object { $_.FriendlyName -match 'NVIDIA|AMD|Radeon|Intel.*(Display|Graphics)' }
         foreach ($dev in $audioDevs) {
@@ -3412,7 +3412,9 @@ function Update-MainLayout {
 
         $logY = $tabControl.Bottom + 12
         $buttonX = [Math]::Max($margin + 600, $RootForm.ClientSize.Width - $rightButtonColWidth - $margin)
+        $buttonX = [Math]::Min($buttonX, [Math]::Max($margin, ($RootForm.ClientSize.Width - $rightButtonColWidth - $margin)))
         $logWidth = [Math]::Max(500, $buttonX - $margin - $rightButtonGap)
+        $logWidth = [Math]::Min($logWidth, [Math]::Max(320, ($RootForm.ClientSize.Width - $rightButtonColWidth - $rightButtonGap - (2 * $margin))))
         $availableLogHeight = $RootForm.ClientSize.Height - $logY - $margin
         $logHeight = [Math]::Max(90, [Math]::Min(145, $availableLogHeight))
 
@@ -3477,10 +3479,15 @@ function Update-TabLayouts {
         $grpBoot.Size = New-Object System.Drawing.Size($rightWidth, 130)
 
         $grpOpts.Location = New-Object System.Drawing.Point($rightX, $grpBoot.Bottom + $sectionGap)
-        $optsUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge 520)
+        $optsLeftKeys = @("DynamicMem","EnhancedSession","StartVM","StrictLegacyMode")
+        $optsRightKeys = @("AutoCreateSwitch","EnableMetering","EnableAutoLogon")
+        $optsLeftPreferred = (($optsLeftKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
+        $optsRightPreferred = (($optsRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
+        $optsRequiredTwoCol = [Math]::Max(520, ($optsLeftPreferred + $optsRightPreferred + 70))
+        $optsUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge $optsRequiredTwoCol)
         if ($optsUseTwoCol) {
             $grpOpts.Size = New-Object System.Drawing.Size($rightWidth, 184)
-            $optsRightX = [Math]::Max(250, [int]($rightWidth * 0.52))
+            $optsRightX = [Math]::Max([int]($optsLeftPreferred + 42), [int]($rightWidth * 0.52))
             $ctrlCreate["DynamicMem"].Location       = New-Object System.Drawing.Point(14, 28)
             $ctrlCreate["EnhancedSession"].Location  = New-Object System.Drawing.Point(14, 58)
             $ctrlCreate["StartVM"].Location          = New-Object System.Drawing.Point(14, 88)
@@ -3503,12 +3510,17 @@ function Update-TabLayouts {
         $ctrlCreate["RoutingHint"].Size = New-Object System.Drawing.Size([Math]::Max(250, ($rightWidth - 24)), 40)
 
         $grpSoft.Location = New-Object System.Drawing.Point($rightX, $grpOpts.Bottom + $sectionGap)
-        $softUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge 520)
+        $softLeftKeys = @("Parsec","USBMMIDD","Share","FullUpdate","NestedNetFollowup","GoldenImage")
+        $softRightKeys = @("VBCable","RDP","PauseUpdate","NestedVirt","ResetBootOrder")
+        $softLeftPreferred = (($softLeftKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
+        $softRightPreferred = (($softRightKeys | ForEach-Object { $ctrlCreate[$_].PreferredSize.Width } | Measure-Object -Maximum).Maximum)
+        $softRequiredTwoCol = [Math]::Max(520, ($softLeftPreferred + $softRightPreferred + 70))
+        $softUseTwoCol = ($isTwoColumnCreate -and $rightWidth -ge $softRequiredTwoCol)
         $goldenLabel = $grpSoft.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq 'Parent VHDX:' } | Select-Object -First 1
 
         if ($softUseTwoCol) {
             $grpSoft.Size = New-Object System.Drawing.Size($rightWidth, 274)
-            $softRightX = [Math]::Max(250, [int]($rightWidth * 0.52))
+            $softRightX = [Math]::Max([int]($softLeftPreferred + 42), [int]($rightWidth * 0.52))
 
             $ctrlCreate["Parsec"].Location            = New-Object System.Drawing.Point(14, 28)
             $ctrlCreate["USBMMIDD"].Location          = New-Object System.Drawing.Point(14, 58)
@@ -3548,6 +3560,15 @@ function Update-TabLayouts {
 
         $ctrlCreate["GoldenParentVHD"].Width = [Math]::Max(170, ($btnBrowseGolden.Left - $ctrlCreate["GoldenParentVHD"].Left - 8))
 
+        $grpConfig.Visible = $true
+        $grpBoot.Visible = $true
+        $grpOpts.Visible = $true
+        $grpSoft.Visible = $true
+        $grpConfig.BringToFront()
+        $grpBoot.BringToFront()
+        $grpOpts.BringToFront()
+        $grpSoft.BringToFront()
+
         $createBottom = [Math]::Max($grpConfig.Bottom, $grpSoft.Bottom)
         $fullInfoWidth = [Math]::Max(360, $createWidth - 12)
         $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point($tabPadding, $createBottom + 10)
@@ -3556,13 +3577,18 @@ function Update-TabLayouts {
         $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size($fullInfoWidth, 18)
 
         $statusY = $ctrlCreate["ModeHint"].Bottom + 8
+        $createInnerRight = $tabPadding + $createWidth
         if ($isTwoColumnCreate) {
-            $statusWidth = [Math]::Max(300, [Math]::Min(($leftWidth - 16), ($createWidth - $btnCreateVM.Width - 36)))
+            $statusWidth = [Math]::Max(300, [Math]::Min(($leftWidth - 16), ($createWidth - $btnCreateVM.Width - 40)))
             $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
             $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size($statusWidth, 34)
             $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point($tabPadding, ($ctrlCreate["CreateStatus"].Bottom + 2))
             $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size($statusWidth, 14)
-            $btnCreateVM.Location = New-Object System.Drawing.Point(($tabPadding + $statusWidth + 18), ($statusY - 2))
+            $buttonX = $tabPadding + $statusWidth + 18
+            if (($buttonX + $btnCreateVM.Width) -gt $createInnerRight) {
+                $buttonX = [Math]::Max($tabPadding, ($createInnerRight - $btnCreateVM.Width))
+            }
+            $btnCreateVM.Location = New-Object System.Drawing.Point($buttonX, ($statusY - 2))
         } else {
             $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point($tabPadding, $statusY)
             $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size([Math]::Max(320, $createWidth - 12), 34)
@@ -3570,6 +3596,12 @@ function Update-TabLayouts {
             $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size([Math]::Max(320, $createWidth - 12), 14)
             $btnCreateVM.Location = New-Object System.Drawing.Point($tabPadding + [Math]::Max(0, [int](($createWidth - $btnCreateVM.Width) / 2)), ($ctrlCreate["CreateProgress"].Bottom + 8))
         }
+
+        $ctrlCreate["ValidationHint"].BringToFront()
+        $ctrlCreate["ModeHint"].BringToFront()
+        $ctrlCreate["CreateStatus"].BringToFront()
+        $ctrlCreate["CreateProgress"].BringToFront()
+        $btnCreateVM.BringToFront()
 
         $createBottomMost = [Math]::Max(
             [Math]::Max($ctrlCreate["CreateProgress"].Bottom, $btnCreateVM.Bottom),
@@ -3579,7 +3611,10 @@ function Update-TabLayouts {
 
         # ----- GPU tab -----
         $gpuWidth = [Math]::Max(680, $tabGPU.ClientSize.Width - (2 * $tabPadding))
-        $singleGpuColumn = ($gpuWidth -lt 900)
+        $gpuMinRightWidth = 430
+        $gpuMinLeftWidth = 340
+        $gpuRequiredTwoCol = $gpuMinLeftWidth + $sectionGap + $gpuMinRightWidth + 8
+        $singleGpuColumn = ($gpuWidth -lt $gpuRequiredTwoCol)
 
         if ($singleGpuColumn) {
             $grpVMs.Location = New-Object System.Drawing.Point($tabPadding, $gpuTop)
@@ -3645,6 +3680,16 @@ function Update-TabLayouts {
             }
             $gpuBottomMost = $ctrlGPU["GpuStatus"].Bottom
         }
+
+        $grpVMs.Visible = $true
+        $grpGPUSettings.Visible = $true
+        $grpGPUOpts.Visible = $true
+        $grpVMs.BringToFront()
+        $grpGPUSettings.BringToFront()
+        $grpGPUOpts.BringToFront()
+        if ($btnUpdateGPU) { $btnUpdateGPU.BringToFront() }
+        if ($ctrlGPU.ContainsKey("SelectionHint") -and $ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].BringToFront() }
+        if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) { $ctrlGPU["GpuStatus"].BringToFront() }
 
         $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
     } catch {
@@ -4181,7 +4226,7 @@ function Update-CreateValidationHint {
         $passwordWeak = (-not $hasMinLength -or $complexityScore -lt 3)
     }
 
-    # Golden image mode uses the embedded user profile â€” skip user/password checks
+    # Golden image mode uses the embedded user profile - skip user/password checks
     if ($useGolden) {
         $userOk = $true
         $passwordOk = $true
@@ -5770,7 +5815,7 @@ $btnUpdateGPU.Add_Click({
                                 -Source "$env:SystemRoot\System32" -Destination "Windows\System32" -FileMask "igfx*"
                         }
                         default {
-                            # Unknown vendor with SupportsGpuInstancePath â€” copy all known vendor DLLs
+                            # Unknown vendor with SupportsGpuInstancePath - copy all known vendor DLLs
                             Write-Log "[$VMName] Copying all known GPU vendor System32 DLLs (vendor: $gpuVendor)..."
                             $allPatterns = $script:NvidiaDllPatterns + @('amdkmd*','igfx*')
                             foreach ($pat in $allPatterns) {
@@ -5922,6 +5967,12 @@ Write-Log "Ready." "OK"
 
 Write-Host "  Startup complete." -ForegroundColor Green
 Write-Host ""
+
+try {
+    Update-MainLayout -RootForm $form
+} catch {
+    Write-UiWarning "Initial layout warning: $($_.Exception.Message)"
+}
 
 try {
     [void]$form.ShowDialog()

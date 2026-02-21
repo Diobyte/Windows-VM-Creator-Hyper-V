@@ -49,6 +49,17 @@ function Write-StartupTrace {
 
 Write-StartupTrace -Message "Startup begin | PSEdition=$($PSVersionTable.PSEdition) | PSVersion=$($PSVersionTable.PSVersion) | Is64BitProcess=$([Environment]::Is64BitProcess) | PSHome=$PSHOME"
 
+# Rotate startup log to prevent unbounded growth across many runs
+try {
+    if (Test-Path $script:StartupLogPath) {
+        $logSize = (Get-Item $script:StartupLogPath -ErrorAction SilentlyContinue).Length
+        if ($logSize -gt 512KB) {
+            $lines = Get-Content $script:StartupLogPath -Tail 200 -ErrorAction SilentlyContinue
+            $lines | Set-Content $script:StartupLogPath -Encoding UTF8 -ErrorAction SilentlyContinue
+        }
+    }
+} catch { <# Swallow rotation errors #> }
+
 # Ensure script runs in Windows PowerShell (Desktop) for WinForms/WPF compatibility
 if ($PSVersionTable.PSEdition -ne 'Desktop') {
     $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
@@ -583,7 +594,6 @@ function Dismount-ImageRetry {
             }
         }
     }
-    return $false
 }
 
 function Wait-ImageDetached {
@@ -604,6 +614,7 @@ function Wait-ImageDetached {
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
 
+    Write-Log "Wait-ImageDetached: '$ImagePath' still attached after ${TimeoutSec}s timeout." "WARN"
     return $false
 }
 
@@ -737,7 +748,6 @@ function Start-VMWithRetry {
             }
         }
     }
-    return $false
 }
 
 function Get-PathAvailableSpaceGB {
@@ -1289,11 +1299,22 @@ function Get-GpuPartitionValues {
     $factor = ($Percentage / 100.0)
     if ($factor -le 0) { $factor = 1.0 }
 
+    # Safe UInt64 multiplication: [double] can exceed [UInt64]::MaxValue due to
+    # precision loss (e.g. [double][UInt64]::MaxValue rounds up), so clamp before cast.
+    $maxU64 = [UInt64]::MaxValue
+    function local:Safe-UInt64Mul([UInt64]$Base, [double]$Factor) {
+        if ($Factor -ge 1.0 -and $Base -eq $maxU64) { return $maxU64 }
+        $raw = [math]::Floor([double]$Base * $Factor)
+        if ($raw -ge [double]$maxU64) { return $maxU64 }
+        if ($raw -lt 1) { return [UInt64]1 }
+        return [UInt64]$raw
+    }
+
     return @{
-        VRAM    = [UInt64][math]::Max(1, [math]::Floor([double]$baseVRAM * $factor))
-        Encode  = [UInt64][math]::Max(1, [math]::Floor([double]$baseEncode * $factor))
-        Decode  = [UInt64][math]::Max(1, [math]::Floor([double]$baseDecode * $factor))
-        Compute = [UInt64][math]::Max(1, [math]::Floor([double]$baseCompute * $factor))
+        VRAM    = Safe-UInt64Mul $baseVRAM $factor
+        Encode  = Safe-UInt64Mul $baseEncode $factor
+        Decode  = Safe-UInt64Mul $baseDecode $factor
+        Compute = Safe-UInt64Mul $baseCompute $factor
     }
 }
 
@@ -1392,6 +1413,10 @@ function Get-WimVersionInfo {
 
     try {
         $wimInfo = dism /Get-WimInfo /WimFile:"$WimFile" /Index:$Index /English 2>&1
+        $dismExit = $LASTEXITCODE
+        if ($dismExit -ne 0) {
+            Write-Log "DISM /Get-WimInfo returned exit code $dismExit for index $Index of '$WimFile'" "WARN"
+        }
         foreach ($line in $wimInfo) {
             $line = $line.ToString().Trim()
             if ($line -match '^Version\s*:\s*(\d+\.\d+\.(\d+))') {
@@ -1649,15 +1674,30 @@ function New-UnattendXml {
     $systemLoc = $culture.Name
     $userLoc   = $culture.Name
 
+    # Fallback if culture values are empty (e.g. invariant culture, minimal OS image)
+    if ([string]::IsNullOrWhiteSpace($uiLang))    { $uiLang   = "en-US" }
+    if ([string]::IsNullOrWhiteSpace($systemLoc))  { $systemLoc = "en-US" }
+    if ([string]::IsNullOrWhiteSpace($userLoc))    { $userLoc   = "en-US" }
+
     # Keyboard Detection
     try { $keyboard = (Get-WinUserLanguageList)[0].InputMethodTips[0] }
     catch { $keyboard = "0409:00000409" }
 
     # Timezone Detection
     try { $timezone = (Get-TimeZone).Id }
-    catch { $timezone = (Get-CimInstance Win32_TimeZone).StandardName }
+    catch {
+        try { $timezone = (Get-CimInstance Win32_TimeZone).StandardName }
+        catch { $timezone = "UTC" }
+    }
 
     $xmlVMName       = ConvertTo-XmlEscapedValue -Value $VMName
+    # Truncate computer name from the raw VM name before XML-escaping to avoid
+    # splitting XML entities (e.g. &amp;) that would occur if truncating the escaped form.
+    $rawCn = $VMName
+    if ($rawCn.Length -gt 15) { $rawCn = $rawCn.Substring(0,15).TrimEnd('-') }
+    if ([string]::IsNullOrWhiteSpace($rawCn)) { $rawCn = $VMName -replace '[^a-zA-Z0-9]','' }
+    if ([string]::IsNullOrWhiteSpace($rawCn)) { $rawCn = 'VM' }
+    $xmlComputerName = ConvertTo-XmlEscapedValue -Value $rawCn
     $xmlUsername     = ConvertTo-XmlEscapedValue -Value $Username
     $xmlPasswordB64  = ConvertTo-UnattendPassword -PlainText $passwordPlain
     $passwordPlain   = $null   # Minimize plaintext password lifetime in memory
@@ -1805,7 +1845,7 @@ function New-UnattendXml {
 
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <ComputerName>$($cn = if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15).TrimEnd('-') } else { $xmlVMName }; if ([string]::IsNullOrWhiteSpace($cn)) { $cn = $xmlVMName -replace '[^a-zA-Z0-9]','' }; if ([string]::IsNullOrWhiteSpace($cn)) { $cn = 'VM' }; $cn)</ComputerName>
+      <ComputerName>$xmlComputerName</ComputerName>
       <TimeZone>$xmlTimezone</TimeZone>
     </component>
     <component name="Microsoft-Windows-Security-SPP-UX" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -4204,6 +4244,7 @@ $btnCreateVM.Add_Click({
 
     $script:IsCreating = $true
     $validationError = $null
+    $isValidationError = $false
 
     $VMName = ""
     $VMLoc = ""
@@ -4300,6 +4341,7 @@ $btnCreateVM.Add_Click({
         }
 
         # ---- Validate ----
+        $isValidationError = $true   # flag: throws in this section are user-facing validation errors
         if ([string]::IsNullOrWhiteSpace($VMName)) { throw "VM Name is required!" }
         if ($VMName -notmatch '^[a-zA-Z][a-zA-Z0-9-]*$') { 
             throw "VM Name must start with a letter and contain only letters, numbers, and hyphens."
@@ -4410,6 +4452,7 @@ $btnCreateVM.Add_Click({
         }
 
         if (-not $UseGoldenImage -and ($null -eq $SelectedIndex -or $SelectedIndex -lt 1)) { throw "No Windows Edition selected!" }
+        $isValidationError = $false  # end of validation section
 
         $hostSupportedVersions = "Unavailable"
         try {
@@ -4669,8 +4712,8 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Write-Log "Generating Autounattend.xml..."
             $UnattendXMLPath = Join-Path $VMLoc "Autounattend.xml"
             $guestArchForUnattend = if ($UseGoldenImage) { $script:HostArch } else { $script:DetectedGuestArch }
-            New-UnattendXml -VMName $VMName -Username $Username -Password $Password -EnableAutoLogon $EnableAutoLogon -IsWindows11 $IsWin11 -GuestArch $guestArchForUnattend |
-                ForEach-Object { [IO.File]::WriteAllText($UnattendXMLPath, $_, [System.Text.UTF8Encoding]::new($false)) }
+            $unattendContent = New-UnattendXml -VMName $VMName -Username $Username -Password $Password -EnableAutoLogon $EnableAutoLogon -IsWindows11 $IsWin11 -GuestArch $guestArchForUnattend
+            [IO.File]::WriteAllText($UnattendXMLPath, $unattendContent, [System.Text.UTF8Encoding]::new($false))
 
             # Minimize plaintext password lifetime in memory
             $PasswordText = $null
@@ -4936,7 +4979,6 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                         if ($pVol -and $pVol.FileSystem -eq 'NTFS' -and $pVol.DriveLetter) {
                             $regPath = "$($pVol.DriveLetter):\Windows\System32\config\SOFTWARE"
                             if (Test-Path $regPath) {
-                                $regKey = $null
                                 try {
                                     reg load "HKU\__golden_detect" $regPath 2>&1 | Out-Null
                                     $goldenBuild = (Get-ItemProperty -Path 'Registry::HKU\__golden_detect\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuild' -ErrorAction SilentlyContinue).CurrentBuild
@@ -5145,9 +5187,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         } catch {
             # Handle validation errors vs other unexpected errors
             $errorMessage = $_.Exception.Message
-            # Match all user-facing validation throws (prefixes of throw messages in the validation section)
-            $isValidation = $errorMessage -match '^(VM Name|VM Location|Valid ISO|Selected ISO|Golden Image|Insufficient disk|No WIM|No Virtual Switch|Selected Virtual Switch|Could not auto-create|No Windows Edition|Username|Password|Dynamic Memory|Failed to create VM location|A VM named)'
-            if ($isValidation) {
+            if ($isValidationError) {
                 # This is a validation error - show user-friendly message
                 $validationError = $errorMessage
                 Write-Log $errorMessage "ERROR"

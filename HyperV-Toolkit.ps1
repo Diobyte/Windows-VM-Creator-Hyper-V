@@ -308,6 +308,11 @@ function Test-PathCached {
     if ($script:PathCache.Count -gt 500) {
         $staleKeys = @($script:PathCache.GetEnumerator() | Where-Object { ($now - $_.Value.Time).TotalMilliseconds -ge $script:PathCacheTtlMs } | ForEach-Object { $_.Key })
         foreach ($k in $staleKeys) { $script:PathCache.Remove($k) }
+        # Hard-cap fallback: if still over limit (all entries fresh), evict oldest entries regardless of TTL
+        if ($script:PathCache.Count -gt 500) {
+            $oldestKeys = @($script:PathCache.GetEnumerator() | Sort-Object { $_.Value.Time } | Select-Object -First ($script:PathCache.Count - 400) | ForEach-Object { $_.Key })
+            foreach ($k in $oldestKeys) { $script:PathCache.Remove($k) }
+        }
     }
     $script:PathCache[$Path] = @{ Result = $result; Time = $now }
     return $result
@@ -1532,16 +1537,13 @@ function Invoke-DismApplyImage {
             Stop-Job $dismJob -ErrorAction SilentlyContinue
             Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
 
-            # Clean up partially applied image to avoid corrupt state on retry
+            # Clean up partially applied image to avoid corrupt state on retry.
+            # Always remove the *contents* (not the directory itself) so drive-root targets like E:\ are handled safely.
             if (Test-Path $ApplyDir) {
-                $applyRoot = [System.IO.Path]::GetPathRoot($ApplyDir)
-                if ($ApplyDir.TrimEnd('\') -ne $applyRoot.TrimEnd('\')) {
-                    Write-Log "Cleaning up partial DISM image at $ApplyDir before retry..." "WARN"
-                    Get-ChildItem -Path $ApplyDir -Force -ErrorAction SilentlyContinue |
-                        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-                } else {
-                    Write-Log "Skipping cleanup: ApplyDir is a drive root ($ApplyDir)" "WARN"
-                }
+                Write-Log "Cleaning up partial DISM image at $ApplyDir before retry..." "WARN"
+                Get-ChildItem -Path $ApplyDir -Force -ErrorAction SilentlyContinue |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Log "Partial image cleanup complete." "WARN"
             }
             continue
         }
@@ -1759,7 +1761,6 @@ function New-UnattendXml {
         <OptIn>false</OptIn>
       </Diagnostics>
       <UseConfigurationSet>false</UseConfigurationSet>$windowsPeRunSync
-      <ComputerName>$(if ($xmlVMName.Length -gt 15) { $xmlVMName.Substring(0,15) } else { $xmlVMName })</ComputerName>
     </component>
   </settings>
 
@@ -2103,7 +2104,7 @@ function Copy-DriversToVhd {
     try {
         if ($FileMask -eq "*" -and (Get-Command robocopy -ErrorAction SilentlyContinue)) {
             & robocopy "$Source" "$target" /E /MT:8 /NP /R:2 /W:1 /XJ /NFL /NDL /NJH /NJS 2>&1 | Out-Null
-            if ($LASTEXITCODE -gt 7) {
+            if ($LASTEXITCODE -ge 8) {
                 Write-Log "[$VMName] Robocopy returned exit code $LASTEXITCODE" "WARN"
                 # Fallback to Copy-Item
                 $srcPath = Join-Path $Source $FileMask
@@ -2271,7 +2272,7 @@ function Copy-GpuDriverFolders {
             try {
                 if (Get-Command robocopy -ErrorAction SilentlyContinue) {
                     & robocopy "$($folder.FullName)" "$dest" /E /MT:8 /NP /R:2 /W:1 /XJ /NFL /NDL /NJH /NJS 2>&1 | Out-Null
-                    if ($LASTEXITCODE -le 7) { $copied++ }
+                    if ($LASTEXITCODE -lt 8) { $copied++ }
                     else {
                         Copy-Item -Path $folder.FullName -Destination $dest -Recurse -Force -ErrorAction Stop
                         $copied++
@@ -3047,6 +3048,13 @@ $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point(378, 492)
 $ctrlGPU["SelectionHint"].ForeColor = $theme.Muted
 $tabGPU.Controls.Add($ctrlGPU["SelectionHint"])
 
+$ctrlGPU["GpuStatus"] = New-Object System.Windows.Forms.Label
+$ctrlGPU["GpuStatus"].Text = ""
+$ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size(500, 18)
+$ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point(378, 514)
+$ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
+$tabGPU.Controls.Add($ctrlGPU["GpuStatus"])
+
 # ============================================================
 #  SHARED LOG PANEL
 # ============================================================
@@ -3398,6 +3406,19 @@ function Update-TabLayouts {
         }
 
         $gpuBottomMost = if ($ctrlGPU.ContainsKey("SelectionHint") -and $null -ne $ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Bottom } else { $btnUpdateGPU.Bottom }
+
+        if ($ctrlGPU.ContainsKey("GpuStatus") -and $null -ne $ctrlGPU["GpuStatus"]) {
+            $hintBottom = $gpuBottomMost
+            if ($singleGpuColumn) {
+                $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point($tabPadding, ($hintBottom + 4))
+                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 18)
+            } else {
+                $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point($gpuRightX, ($hintBottom + 4))
+                $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 18)
+            }
+            $gpuBottomMost = $ctrlGPU["GpuStatus"].Bottom
+        }
+
         $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
     } catch {
         Write-Output "Tab layout adjustment warning: $($_.Exception.Message)"
@@ -3541,7 +3562,7 @@ $toolTip.AutoPopDelay = 8000
 $toolTip.InitialDelay = 300
 $toolTip.ReshowDelay = 120
 $toolTip.ShowAlways = $true
-$toolTip.SetToolTip($ctrlCreate["VMName"], "Use a short unique VM name (letters, numbers, -, _).")
+$toolTip.SetToolTip($ctrlCreate["VMName"], "Use a short unique VM name (letters, numbers, hyphens only). Underscores are not valid Windows computer names. Cannot start or end with a hyphen.")
 $toolTip.SetToolTip($ctrlCreate["ISOPath"], "Windows installation ISO for unattended deployment mode.")
 $toolTip.SetToolTip($ctrlCreate["GoldenParentVHD"], "Parent image used when Golden mode is enabled (differencing disk).")
 $toolTip.SetToolTip($ctrlCreate["CheckpointMode"], "Production/ProductionOnly are recommended over Standard for stable rollback.")
@@ -3556,12 +3577,12 @@ $toolTip.SetToolTip($ctrlCreate["StartVM"], "Starts the VM automatically after p
 $toolTip.SetToolTip($ctrlCreate["StrictLegacyMode"], "Forces legacy-safe deployment behavior (non-compact DISM apply + legacy-compatible secure boot template order) for older/custom Windows images.")
 $toolTip.SetToolTip($ctrlCreate["AutoCreateSwitch"], "If selected switch is missing or blank, automatically creates/uses an internal NAT switch so first boot has network routing without manual setup.")
 $toolTip.SetToolTip($ctrlCreate["EnableMetering"], "Enables Hyper-V resource metering and exports an initial usage snapshot (CPU, memory, disk). Useful for capacity tracking.")
-$toolTip.SetToolTip($ctrlCreate["EnableAutoLogon"], "Automatically signs in the configured local account during initial setup logons. Disable for stricter credential posture.")
+$toolTip.SetToolTip($ctrlCreate["EnableAutoLogon"], "Automatically signs in the configured local account during initial setup logons (LogonCount=999 for unattended multi-reboot setup). Disable for stricter credential posture, especially if the VM will be internet-exposed.")
 $toolTip.SetToolTip($ctrlCreate["Parsec"], "Downloads and installs Parsec silently in SetupComplete (signature-validated). Useful for low-latency remote streaming workflows.")
 $toolTip.SetToolTip($ctrlCreate["VBCable"], "Installs VB-Audio virtual cable to route virtual audio devices in the guest. Good for streaming/remote desktop audio workflows.")
 $toolTip.SetToolTip($ctrlCreate["USBMMIDD"], "Installs a virtual display driver to provide a persistent headless display target in remote sessions.")
 $toolTip.SetToolTip($ctrlCreate["RDP"], "Enables Remote Desktop and firewall rules in the guest after setup.")
-$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a desktop folder inside the guest with permissive access for quick host/guest file transfer.")
+$toolTip.SetToolTip($ctrlCreate["Share"], "Creates and shares a Desktop\share folder inside the guest with Everyone:FullControl access. Suitable for dev/lab VMs only — do not use on internet-exposed or production VMs.")
 $toolTip.SetToolTip($ctrlCreate["PauseUpdate"], "Pauses Windows Updates for an extended period after deployment. Useful for preserving known-good driver states.")
 $toolTip.SetToolTip($ctrlCreate["FullUpdate"], "Runs a full Windows Update sequence at first logon using PSWindowsUpdate (can take significant time and may reboot).")
 $toolTip.SetToolTip($ctrlCreate["NestedVirt"], "Exposes virtualization extensions to the guest so it can run Hyper-V/WSL2/other nested hypervisors.")
@@ -3831,7 +3852,7 @@ function Update-CreateValidationHint {
     $useGolden = ($ctrlCreate.ContainsKey("GoldenImage") -and $ctrlCreate["GoldenImage"] -and $ctrlCreate["GoldenImage"].Checked)
     $goldenPath = if ($ctrlCreate.ContainsKey("GoldenParentVHD") -and $ctrlCreate["GoldenParentVHD"]) { [string]$ctrlCreate["GoldenParentVHD"].Text } else { "" }
 
-    $nameOk = (-not [string]::IsNullOrWhiteSpace($vmName)) -and ($vmName -match '^[a-zA-Z0-9_-]+$') -and ($vmName.Length -le 64)
+    $nameOk = (-not [string]::IsNullOrWhiteSpace($vmName)) -and ($vmName -match '^[a-zA-Z0-9-]+$') -and ($vmName -notmatch '^-|-$') -and ($vmName.Length -le 64)
     $sourceOk = if ($useGolden) {
         -not [string]::IsNullOrWhiteSpace($goldenPath) -and (Test-PathCached $goldenPath)
     } else {
@@ -3839,7 +3860,13 @@ function Update-CreateValidationHint {
         $isoMountedMatches = $false
         if ($script:MountedISO -and $script:MountedISO.ImagePath) {
             $mountedIsoPath = [string]$script:MountedISO.ImagePath
-            $isoMountedMatches = ($mountedIsoPath.Trim().ToLowerInvariant() -eq $isoPath.Trim().ToLowerInvariant())
+            try {
+                $resolvedMounted = [System.IO.Path]::GetFullPath($mountedIsoPath.Trim()).ToLowerInvariant()
+                $resolvedSelected = [System.IO.Path]::GetFullPath($isoPath.Trim()).ToLowerInvariant()
+                $isoMountedMatches = ($resolvedMounted -eq $resolvedSelected)
+            } catch {
+                $isoMountedMatches = ($mountedIsoPath.Trim().ToLowerInvariant() -eq $isoPath.Trim().ToLowerInvariant())
+            }
         }
         $editionSelected = ($ctrlCreate.ContainsKey("Edition") -and $ctrlCreate["Edition"] -and $ctrlCreate["Edition"].SelectedItem)
         $wimReady = (-not [string]::IsNullOrWhiteSpace($script:WimFile)) -and (Test-PathCached $script:WimFile) -and $editionSelected
@@ -4182,7 +4209,8 @@ $btnCreateVM.Add_Click({
 
         # ---- Validate ----
         if ([string]::IsNullOrWhiteSpace($VMName)) { Write-Log "VM Name is required!" "ERROR"; return }
-        if ($VMName -notmatch '^[a-zA-Z0-9_-]+$') { Write-Log "VM Name contains invalid characters. Use only letters, numbers, hyphens, underscores." "ERROR"; return }
+        if ($VMName -notmatch '^[a-zA-Z0-9-]+$') { Write-Log "VM Name contains invalid characters. Use only letters, numbers, and hyphens (underscores are not valid Windows computer names)." "ERROR"; return }
+        if ($VMName -match '^-|-$') { Write-Log "VM Name cannot start or end with a hyphen." "ERROR"; return }
         if ($VMName.Length -gt 64) { Write-Log "VM Name must be 64 characters or less." "ERROR"; return }
         if ($VMName.Length -gt 15) { Write-Log "VM Name is longer than 15 characters. This is valid for Hyper-V, but may reduce compatibility with legacy NetBIOS-dependent workflows." "WARN" }
         if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) { Write-Log "A VM named '$VMName' already exists!" "ERROR"; return }
@@ -4352,6 +4380,10 @@ $btnCreateVM.Add_Click({
         Write-Log "OS: $effectiveDetectedOsName Build $effectiveDetectedBuild" "INFO"
         Write-Log "Secure Boot: $EnableSecureBoot | TPM: $EnableTPM" "INFO"
         Write-Log "========================================" "INFO"
+        if (-not $UseGoldenImage) {
+            Write-Log "  Note: UAC (EnableLUA) is disabled in the unattend XML to allow automated first-boot setup. Re-enable via 'User Account Control Settings' after provisioning if required by policy." "WARN"
+            Write-Log "  Note: Windows Firewall is suppressed only during the WindowsPE (setup) phase and returns to OS defaults once first-boot completes." "INFO"
+        }
 
         # ---- Disable AutoPlay ----
         $autoPlayGuard = Disable-AutoPlayGuarded
@@ -4409,8 +4441,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $resY = $matches[2]
             $lines += @(
                 ':: --- Set display resolution ---'
+                'if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (echo [%date% %time%] QRes skipped: not supported on ARM64 >> %LOGFILE% & goto :AfterQRes)'
                 'echo [%date% %time%] Setting display resolution... >> %LOGFILE%'
                 ('if exist "%WORKDIR%\QRes.exe" start /wait "" "%WORKDIR%\QRes.exe" /x:{0} /y:{1}' -f $resX, $resY)
+                ':AfterQRes'
                 ''
             )
         }
@@ -4810,7 +4844,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
 
         # Secure Boot
-        Set-VMGuestSecureBoot -VMName $VMName -EnableSecureBoot $EnableSecureBoot -GuestIsWindows11 $IsWin11 -GuestBuild $guestProfile.Build -TemplateOrder $guestProfile.SecureBootTemplateOrder | Out-Null
+        $secureBootResult = Set-VMGuestSecureBoot -VMName $VMName -EnableSecureBoot $EnableSecureBoot -GuestIsWindows11 $IsWin11 -GuestBuild $guestProfile.Build -TemplateOrder $guestProfile.SecureBootTemplateOrder
+        if ($EnableSecureBoot -and -not $secureBootResult) {
+            Write-Log "  Secure Boot was requested but template configuration could not be fully applied. Verify firmware settings in the VM manually." "WARN"
+        }
 
         # TPM
         if ($EnableTPM) {
@@ -5068,6 +5105,12 @@ $btnUpdateGPU.Add_Click({
         Write-Log "GPU Vendor: $gpuVendor | Smart Copy: $smartCopy | AutoExpand: $autoExpand | Allocation: $gpuAllocPercent%" "INFO"
         Write-Log "========================================" "INFO"
 
+        if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
+            $ctrlGPU["GpuStatus"].Text = "Running GPU update for $($selectedVMs.Count) VM(s)..."
+            $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
+            $ctrlGPU["GpuStatus"].Refresh()
+        }
+
         # Disable AutoPlay
         $autoPlayGuard = Disable-AutoPlayGuarded
 
@@ -5082,6 +5125,11 @@ $btnUpdateGPU.Add_Click({
             try {
                 $vm = Get-VM -Name $VMName -ErrorAction Stop
                 Write-Log "Processing VM: $VMName"
+                if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
+                    $ctrlGPU["GpuStatus"].Text = "[$VMName] Processing..."
+                    $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
+                    $ctrlGPU["GpuStatus"].Refresh()
+                }
 
                 if (-not $removeOnlyMode -and $gpuVendor -eq 'NVIDIA') {
                     try {
@@ -5301,6 +5349,11 @@ $btnUpdateGPU.Add_Click({
                 }
 
                 Write-Log "[$VMName] Done." "OK"
+                if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
+                    $ctrlGPU["GpuStatus"].Text = "[$VMName] Complete."
+                    $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::LimeGreen
+                    $ctrlGPU["GpuStatus"].Refresh()
+                }
 
             } catch {
                 Write-ErrorWithGuidance -Context "GPU update [$VMName]" -ErrorRecord $_
@@ -5357,6 +5410,9 @@ $btnUpdateGPU.Add_Click({
         }
         $script:IsUpdatingGPU = $false
         $tabControl.Enabled   = $true
+        if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
+            $ctrlGPU["GpuStatus"].Text = ""
+        }
         Update-GpuActionState
     }
 })

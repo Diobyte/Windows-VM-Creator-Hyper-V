@@ -32,6 +32,25 @@ if (-not [Environment]::Is64BitProcess) {
 # Admin check
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
+    $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+    if (-not [string]::IsNullOrWhiteSpace($scriptPath) -and (Test-Path $scriptPath)) {
+        try {
+            Start-Process -FilePath "PowerShell.exe" -Verb RunAs -ArgumentList @(
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-Sta',
+                '-File', "`"$scriptPath`""
+            ) | Out-Null
+            exit 0
+        } catch {
+            [System.Windows.MessageBox]::Show(
+                "Administrator elevation was cancelled or failed.`n`nPlease right-click Launch.bat and select 'Run as Administrator'.",
+                "Administrator Required", "OK", "Warning"
+            ) | Out-Null
+            exit 1
+        }
+    }
+
     [System.Windows.MessageBox]::Show(
         "This tool must be run as Administrator.`n`nPlease right-click and select 'Run as Administrator', or use the Launch.bat file.",
         "Administrator Required", "OK", "Warning"

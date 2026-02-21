@@ -441,6 +441,27 @@ function Dismount-ImageRetry {
     }
 }
 
+function Wait-ImageDetached {
+    param(
+        [string]$ImagePath,
+        [int]$TimeoutSec = 20
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ImagePath)) { return $true }
+    if ($TimeoutSec -lt 1) { $TimeoutSec = 1 }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $img = Get-DiskImage -ImagePath $ImagePath -ErrorAction SilentlyContinue
+        if (-not $img -or -not $img.Attached) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+
+    return $false
+}
+
 function Stop-VMWithTimeout {
     param(
         [string]$VMName,
@@ -1658,6 +1679,7 @@ $form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.BackColor         = [System.Drawing.Color]::FromArgb(24, 26, 31)
 $form.ForeColor         = [System.Drawing.Color]::White
 $form.Padding           = New-Object System.Windows.Forms.Padding(6)
+$form.KeyPreview        = $true
 
 # Theme palette
 $theme = @{
@@ -2148,6 +2170,9 @@ function Update-VMList {
             if ($this -and $this.Text) {
                 $script:GpuSelectedVMs[$this.Text] = [bool]$this.Checked
             }
+            if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+                Update-GpuActionState
+            }
         })
         if ($toolTip) {
             $toolTip.SetToolTip($cb, "Select this VM for GPU driver/adapter update. Selection is preserved while filtering and refreshing.")
@@ -2157,11 +2182,15 @@ function Update-VMList {
         $y += 26
     }
     $ctrlGPU["VMCheckboxes"] = $checkboxes
+    if (Get-Command Update-GpuActionState -ErrorAction SilentlyContinue) {
+        Update-GpuActionState
+    }
 }
 Update-VMList
 
 $ctrlGPU["VmSearch"].Add_TextChanged({ Update-VMList })
 $btnClearVmSearch.Add_Click({ $ctrlGPU["VmSearch"].Text = ""; Update-VMList })
+$ctrlGPU["GpuSelector"].Add_SelectedIndexChanged({ Update-GpuActionState })
 
 # Select All / None buttons
 $btnSelectAll = New-Object System.Windows.Forms.Button
@@ -2324,6 +2353,13 @@ $btnUpdateGPU.BackColor = [System.Drawing.Color]::FromArgb(0, 153, 51)
 $btnUpdateGPU.ForeColor = [System.Drawing.Color]::White
 $btnUpdateGPU.Font      = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $tabGPU.Controls.Add($btnUpdateGPU)
+
+$ctrlGPU["SelectionHint"] = New-Object System.Windows.Forms.Label
+$ctrlGPU["SelectionHint"].Text = "Select at least one VM to enable GPU update."
+$ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size(500, 18)
+$ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point(378, 492)
+$ctrlGPU["SelectionHint"].ForeColor = $theme.Muted
+$tabGPU.Controls.Add($ctrlGPU["SelectionHint"])
 
 # ============================================================
 #  SHARED LOG PANEL
@@ -2655,6 +2691,19 @@ function Update-TabLayouts {
         $ctrlGPU["GpuAllocSlider"].Width = $sliderWidth
         $allocLabelX = [Math]::Min(($ctrlGPU["GpuAllocSlider"].Right + 8), ($grpGPUSettings.Width - 52))
         $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point([Math]::Max(10, $allocLabelX), 158)
+
+        if ($ctrlGPU.ContainsKey("SelectionHint") -and $ctrlGPU["SelectionHint"]) {
+            if ($singleGpuColumn) {
+                $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($tabPadding, ($btnUpdateGPU.Bottom + 8))
+                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuWidth - 12), 18)
+            } else {
+                $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($gpuRightX, ($btnUpdateGPU.Bottom + 8))
+                $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size([Math]::Max(300, $gpuRightWidth), 18)
+            }
+        }
+
+        $gpuBottomMost = if ($ctrlGPU.ContainsKey("SelectionHint") -and $ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Bottom } else { $btnUpdateGPU.Bottom }
+        $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
     } catch {
         Write-Output "Tab layout adjustment warning: $($_.Exception.Message)"
     }
@@ -2679,8 +2728,8 @@ function Set-ButtonHover {
     # Typed copies for closure capture clarity
     [System.Drawing.Color]$normalColor = $Normal
     [System.Drawing.Color]$hoverColor  = $Hover
-    if ($normalColor -eq $null -or $normalColor.IsEmpty) { $normalColor = [System.Drawing.SystemColors]::ControlDarkDark }
-    if ($hoverColor -eq $null -or $hoverColor.IsEmpty) { $hoverColor = $normalColor }
+    if ($null -eq $normalColor -or $normalColor.IsEmpty) { $normalColor = [System.Drawing.SystemColors]::ControlDarkDark }
+    if ($null -eq $hoverColor -or $hoverColor.IsEmpty) { $hoverColor = $normalColor }
 
     $Button.BackColor = $normalColor
     $Button.FlatStyle = 'Flat'
@@ -2825,6 +2874,29 @@ $toolTip.SetToolTip($ctrlGPU["CopySvcDriver"], "Copies GPU service driver compon
 $toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"], "Controls GPU partition resource share assigned to the VM.")
 $toolTip.SetToolTip($btnUpdateGPU, "Inject/update GPU-P drivers and optional services into selected VMs.")
 $toolTip.SetToolTip($ctrlGPU["VmSearch"], "Type to quickly filter VMs by name.")
+$toolTip.SetToolTip($btnCreateVM, "Start VM provisioning using the validated settings from the Create tab.")
+$toolTip.SetToolTip($btnClearLog, "Clear the on-screen log output.")
+$toolTip.SetToolTip($btnSaveLog, "Export the current log output to a file.")
+$toolTip.SetToolTip($btnExit, "Close the toolkit and run image mount cleanup.")
+
+$form.Add_KeyDown({
+    param($sender, $e)
+    if (-not $e -or -not $e.Control) { return }
+
+    if ($e.KeyCode -eq [System.Windows.Forms.Keys]::L) {
+        if ($btnClearLog -and $btnClearLog.Enabled) { $btnClearLog.PerformClick() }
+        $e.SuppressKeyPress = $true
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::S) {
+        if ($btnSaveLog -and $btnSaveLog.Enabled) { $btnSaveLog.PerformClick() }
+        $e.SuppressKeyPress = $true
+    } elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::F -and $tabControl.SelectedTab -eq $tabGPU) {
+        if ($ctrlGPU.ContainsKey("VmSearch") -and $ctrlGPU["VmSearch"]) {
+            $ctrlGPU["VmSearch"].Focus()
+            $ctrlGPU["VmSearch"].SelectAll()
+        }
+        $e.SuppressKeyPress = $true
+    }
+})
 
 #endregion
 
@@ -3011,14 +3083,64 @@ function Update-CreateValidationHint {
 
     $tick = [char]0x2713
     $cross = [char]0x2717
+    $isReady = ($nameOk -and $sourceOk -and $networkOk -and $userOk)
     $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross})"
 
-    if ($nameOk -and $sourceOk -and $networkOk -and $userOk) {
+    if ($isReady) {
         $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::LimeGreen
     } elseif ($nameOk -or $sourceOk -or $networkOk -or $userOk) {
         $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::Gold
     } else {
         $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
+    }
+
+    if ($ctrlCreate.ContainsKey("CreateStatus") -and $ctrlCreate["CreateStatus"] -and -not $script:IsCreating) {
+        if ($isReady) {
+            $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
+            $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::LimeGreen
+        } else {
+            $missing = @()
+            if (-not $nameOk) { $missing += "VM name" }
+            if (-not $sourceOk) { $missing += (if ($useGolden) { "parent VHD" } else { "ISO/source" }) }
+            if (-not $networkOk) { $missing += "network" }
+            if (-not $userOk) { $missing += "user" }
+            $ctrlCreate["CreateStatus"].Text = "Fix required: $($missing -join ', ')"
+            $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Gold
+        }
+    }
+
+    if ($btnCreateVM -and -not $script:IsCreating) {
+        $btnCreateVM.Enabled = $isReady
+    }
+
+    return $isReady
+}
+
+function Update-GpuActionState {
+    if (-not $ctrlGPU -or -not $btnUpdateGPU) { return }
+
+    $selectedCount = 0
+    if ($ctrlGPU.ContainsKey("VMCheckboxes") -and $ctrlGPU["VMCheckboxes"]) {
+        $selectedCount = @($ctrlGPU["VMCheckboxes"] | Where-Object { $_ -and $_.Checked }).Count
+    }
+    $hasGpuChoice = ($ctrlGPU.ContainsKey("GpuSelector") -and $ctrlGPU["GpuSelector"] -and $ctrlGPU["GpuSelector"].SelectedIndex -ge 0)
+    $canRun = ($selectedCount -gt 0 -and $hasGpuChoice)
+
+    if ($ctrlGPU.ContainsKey("SelectionHint") -and $ctrlGPU["SelectionHint"]) {
+        if ($selectedCount -eq 0) {
+            $ctrlGPU["SelectionHint"].Text = "Select at least one VM to enable GPU update."
+            $ctrlGPU["SelectionHint"].ForeColor = $theme.Muted
+        } elseif (-not $hasGpuChoice) {
+            $ctrlGPU["SelectionHint"].Text = "Select a GPU provider to continue."
+            $ctrlGPU["SelectionHint"].ForeColor = [System.Drawing.Color]::Gold
+        } else {
+            $ctrlGPU["SelectionHint"].Text = "Ready: $selectedCount VM(s) selected for GPU update."
+            $ctrlGPU["SelectionHint"].ForeColor = [System.Drawing.Color]::LimeGreen
+        }
+    }
+
+    if (-not $script:IsUpdatingGPU) {
+        $btnUpdateGPU.Enabled = $canRun
     }
 }
 
@@ -3058,6 +3180,24 @@ $ctrlCreate["AutoCreateSwitch"].Add_CheckedChanged({
 
 $ctrlCreate["DynamicMem"].Add_CheckedChanged({
     Update-DynamicMemoryUi
+})
+
+$ctrlCreate["DynamicMemMin"].Add_ValueChanged({
+    if ([int]$ctrlCreate["DynamicMemMin"].Value -gt [int]$ctrlCreate["Memory"].Value) {
+        $ctrlCreate["DynamicMemMin"].Value = $ctrlCreate["Memory"].Value
+    }
+    if ([int]$ctrlCreate["DynamicMemMin"].Value -gt [int]$ctrlCreate["DynamicMemMax"].Value) {
+        $ctrlCreate["DynamicMemMax"].Value = $ctrlCreate["DynamicMemMin"].Value
+    }
+})
+
+$ctrlCreate["DynamicMemMax"].Add_ValueChanged({
+    if ([int]$ctrlCreate["DynamicMemMax"].Value -lt [int]$ctrlCreate["Memory"].Value) {
+        $ctrlCreate["DynamicMemMax"].Value = $ctrlCreate["Memory"].Value
+    }
+    if ([int]$ctrlCreate["DynamicMemMax"].Value -lt [int]$ctrlCreate["DynamicMemMin"].Value) {
+        $ctrlCreate["DynamicMemMin"].Value = $ctrlCreate["DynamicMemMax"].Value
+    }
 })
 
 $ctrlCreate["NestedVirt"].Add_CheckedChanged({
@@ -3110,6 +3250,8 @@ $ctrlCreate["ISOPath"].Add_TextChanged({ Update-CreateValidationHint })
 $ctrlCreate["GoldenParentVHD"].Add_TextChanged({ Update-CreateValidationHint })
 $ctrlCreate["Username"].Add_TextChanged({ Update-CreateValidationHint })
 $ctrlCreate["Switch"].Add_SelectedIndexChanged({ Update-RoutingHint; Update-CreateValidationHint })
+
+Update-GpuActionState
 
 # ================================================================
 #  CREATE VM - Main Logic
@@ -3909,9 +4051,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
         $script:IsCreating = $false
         $tabControl.Enabled  = $true
-        $btnCreateVM.Enabled = $true
+        [void](Update-CreateValidationHint)
         if ($ctrlCreate.ContainsKey("CreateStatus") -and $ctrlCreate.ContainsKey("CreateProgress") -and $ctrlCreate["CreateProgress"].Value -lt 100) {
             $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
+            $ctrlCreate["CreateStatus"].ForeColor = $theme.Muted
         }
     }
 })
@@ -3972,6 +4115,7 @@ $btnUpdateGPU.Add_Click({
             $mountedByScript = $false
             $skipDriverInjection = $false
             $gpuAdapterConfigured = $false
+            $startVmPending = $false
 
             try {
                 $vm = Get-VM -Name $VMName -ErrorAction Stop
@@ -4151,15 +4295,9 @@ $btnUpdateGPU.Add_Click({
 
                 Write-Log "[$VMName] GPU drivers injected." "OK"
 
-                # Start VM if requested
+                # Defer VM start until after VHD dismount in finally
                 if ($startAfterUpdate) {
-                    if (Start-VMWithRetry -VMName $VMName -MaxRetries 2) {
-                        Write-Log "[$VMName] VM started." "OK"
-                        # Open vmconnect if not already open
-                        $existing = Get-CimInstance Win32_Process -Filter "Name = 'vmconnect.exe'" -ErrorAction SilentlyContinue |
-                            Where-Object { $_.CommandLine -match [regex]::Escape($VMName) }
-                        if (-not $existing) { vmconnect.exe localhost $VMName }
-                    }
+                    $startVmPending = $true
                 }
 
                 Write-Log "[$VMName] Done." "OK"
@@ -4167,6 +4305,7 @@ $btnUpdateGPU.Add_Click({
             } catch {
                 Write-ErrorWithGuidance -Context "GPU update [$VMName]" -ErrorRecord $_
             } finally {
+                $canStartVm = $true
                 if ($mountedByScript -and $vhdPath) {
                     if (Dismount-ImageRetry -ImagePath $vhdPath) {
                         Write-Log "[$VMName] VHD dismounted." "OK"
@@ -4178,6 +4317,24 @@ $btnUpdateGPU.Add_Click({
                             Write-Log "[$VMName] VHD dismount fallback failed: $($_.Exception.Message)" "WARN"
                         }
                         Write-Log "[$VMName] VHD dismount required fallback and may still be attached." "WARN"
+                        $canStartVm = $false
+                    }
+
+                    if (-not (Wait-ImageDetached -ImagePath $vhdPath -TimeoutSec 20)) {
+                        Write-Log "[$VMName] VHD still appears attached after dismount wait; skipping auto-start to avoid file-lock failure." "WARN"
+                        $canStartVm = $false
+                    }
+                }
+
+                if ($startVmPending) {
+                    if (-not $canStartVm) {
+                        Write-Log "[$VMName] Start skipped because VHD could not be cleanly released." "WARN"
+                    } elseif (Start-VMWithRetry -VMName $VMName -MaxRetries 2) {
+                        Write-Log "[$VMName] VM started." "OK"
+                        # Open vmconnect if not already open
+                        $existing = Get-CimInstance Win32_Process -Filter "Name = 'vmconnect.exe'" -ErrorAction SilentlyContinue |
+                            Where-Object { $_.CommandLine -match [regex]::Escape($VMName) }
+                        if (-not $existing) { vmconnect.exe localhost $VMName }
                     }
                 }
             }
@@ -4199,7 +4356,7 @@ $btnUpdateGPU.Add_Click({
         }
         $script:IsUpdatingGPU = $false
         $tabControl.Enabled   = $true
-        $btnUpdateGPU.Enabled = $true
+        Update-GpuActionState
     }
 })
 

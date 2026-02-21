@@ -18,6 +18,58 @@ $script:BUILD_WIN10_RS4    = 17134   # Windows 10 1803 (earliest supported for m
 $script:BUILD_WIN10_RS5    = 17763   # Windows 10 1809 (Secure Boot recommended)
 $script:BUILD_WIN10_MIN    = 10240   # Windows 10 RTM
 $script:BUILD_WIN11_MIN    = 22000   # Windows 11 21H2
+$script:HyperVFeatureName  = 'Microsoft-Hyper-V-All'
+$script:EmbeddedQResSha256 = '1c21d5dea9e1ef96c00c829114fe366ed4f23be3b6ce3df89ca8125b700e5945'
+$script:StartupLogPath     = Join-Path $env:TEMP 'HyperV-Toolkit-Startup.log'
+
+function Write-StartupTrace {
+    param(
+        [string]$Message,
+        [ValidateSet('INFO','WARN','ERROR')]
+        [string]$Level = 'INFO'
+    )
+
+    try {
+        Add-Content -Path $script:StartupLogPath -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] [$Level] $Message" -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {
+        # Intentionally swallow logging errors during startup
+    }
+}
+
+Write-StartupTrace -Message "Startup begin | PSEdition=$($PSVersionTable.PSEdition) | PSVersion=$($PSVersionTable.PSVersion) | Is64BitProcess=$([Environment]::Is64BitProcess) | PSHome=$PSHOME"
+
+# Ensure script runs in Windows PowerShell (Desktop) for WinForms/WPF compatibility
+if ($PSVersionTable.PSEdition -ne 'Desktop') {
+    $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+    $winPsCandidates = @(
+        "$env:WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe",
+        "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "$PSHOME\powershell.exe"
+    )
+    $winPsExe = $winPsCandidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) } | Select-Object -First 1
+
+    if ($winPsExe -and -not [string]::IsNullOrWhiteSpace($scriptPath) -and (Test-Path $scriptPath)) {
+        try {
+            Write-StartupTrace -Message "Non-Desktop host detected. Relaunching with Windows PowerShell: $winPsExe"
+            Start-Process -FilePath $winPsExe -ArgumentList @(
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-Sta',
+                '-File', $scriptPath
+            ) | Out-Null
+            Write-StartupTrace -Message "Relaunch command sent successfully"
+            exit 0
+        } catch {
+            Write-StartupTrace -Message "Relaunch failed: $($_.Exception.Message)" -Level 'ERROR'
+            Write-Host "Failed to relaunch in Windows PowerShell: $($_.Exception.Message)" -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    Write-StartupTrace -Message "Windows PowerShell 5.1 executable not found for relaunch" -Level 'ERROR'
+    Write-Host "Windows PowerShell 5.1 is required to run this toolkit." -ForegroundColor Red
+    exit 1
+}
 
 # Execution Policy
 Write-Host "  [1/7] Configuring execution policy..." -ForegroundColor DarkGray
@@ -38,6 +90,7 @@ try {
     Add-Type -AssemblyName System.Drawing
     [System.Windows.Forms.Application]::EnableVisualStyles()
 } catch {
+    Write-StartupTrace -Message "Assembly load failed: $($_.Exception.Message)" -Level 'ERROR'
     Write-Host "  FATAL: Failed to load .NET assemblies: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "  Ensure .NET Framework 4.x or later is installed." -ForegroundColor Red
     Write-Host "  Press Enter to exit..." -ForegroundColor Red
@@ -48,6 +101,7 @@ try {
 # 64-bit process check
 Write-Host "  [3/7] Checking environment..." -ForegroundColor DarkGray
 if (-not [Environment]::Is64BitProcess) {
+    Write-StartupTrace -Message "64-bit check failed: running in 32-bit process" -Level 'ERROR'
     [System.Windows.MessageBox]::Show(
         "This tool requires 64-bit PowerShell.`n`nDo not use PowerShell (x86). Use the standard PowerShell or the Launch.bat file.",
         "64-bit Required", "OK", "Error"
@@ -59,17 +113,23 @@ if (-not [Environment]::Is64BitProcess) {
 Write-Host "  [4/7] Verifying administrator privileges..." -ForegroundColor DarkGray
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
+    Write-StartupTrace -Message "Process is not elevated; requesting admin relaunch"
     $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
     if (-not [string]::IsNullOrWhiteSpace($scriptPath) -and (Test-Path $scriptPath)) {
         try {
-            Start-Process -FilePath "PowerShell.exe" -Verb RunAs -ArgumentList @(
+            $elevatedPowerShell = Join-Path $PSHOME 'powershell.exe'
+            if (-not (Test-Path $elevatedPowerShell)) { $elevatedPowerShell = 'PowerShell.exe' }
+            Write-StartupTrace -Message "Elevating with executable: $elevatedPowerShell"
+            Start-Process -FilePath $elevatedPowerShell -Verb RunAs -ArgumentList @(
                 '-NoProfile',
                 '-ExecutionPolicy', 'RemoteSigned',
                 '-Sta',
                 '-File', $scriptPath
             ) | Out-Null
+            Write-StartupTrace -Message "Elevation command sent successfully"
             exit 0
         } catch {
+            Write-StartupTrace -Message "Elevation failed or canceled: $($_.Exception.Message)" -Level 'ERROR'
             [System.Windows.MessageBox]::Show(
                 "Administrator elevation was cancelled or failed.`n`nPlease right-click Launch.bat and select 'Run as Administrator'.",
                 "Administrator Required", "OK", "Warning"
@@ -96,7 +156,10 @@ function Test-HyperVRunning {
 
 $feature = $null
 try {
-    $featureJob = Start-Job -ScriptBlock { Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue }
+    $featureJob = Start-Job -ScriptBlock {
+        param($FeatureName)
+        Get-WindowsOptionalFeature -Online -FeatureName $FeatureName -ErrorAction SilentlyContinue
+    } -ArgumentList $script:HyperVFeatureName
     if (Wait-Job $featureJob -Timeout 30) {
         $feature = Receive-Job $featureJob -ErrorAction SilentlyContinue
     } else {
@@ -114,10 +177,12 @@ try {
     }
     Remove-Job $featureJob -Force -ErrorAction SilentlyContinue
 } catch {
+    Write-StartupTrace -Message "Hyper-V async check failed; attempting direct query" -Level 'WARN'
     Write-Host "    Async check failed, trying direct query..." -ForegroundColor Yellow
     try {
-        $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue
+        $feature = Get-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -ErrorAction SilentlyContinue
     } catch {
+        Write-StartupTrace -Message "Hyper-V direct query failed: $($_.Exception.Message)" -Level 'ERROR'
         Write-Host "    Hyper-V check failed: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
@@ -138,7 +203,7 @@ if (-not ($feature -and $feature.State -eq "Enabled" -and (Test-HyperVRunning)))
     )
     if ($installChoice -eq "OK") {
         try {
-            Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart -ErrorAction Stop *> $null
+            Enable-WindowsOptionalFeature -Online -FeatureName $script:HyperVFeatureName -All -NoRestart -ErrorAction Stop *> $null
             bcdedit /set hypervisorlaunchtype auto *> $null
             $restartChoice = [System.Windows.MessageBox]::Show(
                 "Hyper-V has been enabled successfully.`n`nDo you want to restart now?",
@@ -599,6 +664,25 @@ function Convert-PlainTextToSecureString {
     }
     $secure.MakeReadOnly()
     return $secure
+}
+
+function Test-StrongPassword {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    if ($Value.Length -lt 12) {
+        return $false
+    }
+
+    $hasUpper = $Value -cmatch '[A-Z]'
+    $hasLower = $Value -cmatch '[a-z]'
+    $hasDigit = $Value -match '\d'
+    $hasSpecial = $Value -match '[^a-zA-Z0-9]'
+
+    return ($hasUpper -and $hasLower -and $hasDigit -and $hasSpecial)
 }
 
 function Update-CreateProgress {
@@ -1076,8 +1160,6 @@ function New-UnattendXml {
         [string]$VMName,
         [string]$Username,
         [AllowNull()][System.Security.SecureString]$Password,
-        [int]$ResWidth,
-        [int]$ResHeight,
         [bool]$IsWindows11 = $false
     )
 
@@ -1181,15 +1263,6 @@ $bypassBlock
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
-      <AutoLogon>
-                <Username>$xmlUsername</Username>
-        <Enabled>true</Enabled>
-        <LogonCount>3</LogonCount>
-        <Password>
-                    <Value>$xmlPasswordB64</Value>
-          <PlainText>false</PlainText>
-        </Password>
-      </AutoLogon>
       <OOBE>
         <ProtectYourPC>3</ProtectYourPC>
         <HideEULAPage>true</HideEULAPage>
@@ -1201,11 +1274,6 @@ $bypassBlock
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>cmd /c C:\Windows\Temp\QRes.exe /x:$ResWidth /y:$ResHeight</CommandLine>
-          <Description>Set Display Resolution</Description>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>2</Order>
           <!-- Username is validated to ^[a-zA-Z0-9]+$ so CMD-safe without extra escaping -->
                       <CommandLine>powershell -NoProfile -Command "try { if (Get-Command Set-LocalUser -ErrorAction SilentlyContinue) { Set-LocalUser -Name '$Username' -PasswordNeverExpires $true } else { &amp; net.exe user '$Username' /expires:never | Out-Null } } catch { &amp; net.exe user '$Username' /expires:never | Out-Null }"</CommandLine>
           <Description>Disable Password Expiration</Description>
@@ -1225,11 +1293,25 @@ function Get-GpuPProviders {
     $gpus = Get-VMHostPartitionableGpu -ErrorAction SilentlyContinue
     if (!$gpus) { return @() }
 
+    $displayDevices = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue
+
     $list = @()
     foreach ($gpu in $gpus) {
-        $pciShort    = ($gpu.Name -split "#")[1]
-        $pnp         = Get-PnpDevice -InstanceId ("PCI\" + $pciShort + "*") -ErrorAction SilentlyContinue
-        $friendlyName = if ($pnp) { $pnp.FriendlyName } else { $gpu.Name }
+        $friendlyName = $gpu.Name
+        $pciShort = ($gpu.Name -split "#")[1]
+        if (-not [string]::IsNullOrWhiteSpace($pciShort) -and $displayDevices) {
+            $normalizedPciShort = ($pciShort -replace '[^a-zA-Z0-9]', '').ToLowerInvariant()
+            $pnp = $displayDevices | Where-Object {
+                $instanceId = $_.InstanceId
+                if ([string]::IsNullOrWhiteSpace($instanceId)) { return $false }
+                $normalizedInstanceId = ($instanceId -replace '[^a-zA-Z0-9]', '').ToLowerInvariant()
+                return $normalizedInstanceId -like "*$normalizedPciShort*"
+            } | Select-Object -First 1
+
+            if ($pnp -and -not [string]::IsNullOrWhiteSpace($pnp.FriendlyName)) {
+                $friendlyName = $pnp.FriendlyName
+            }
+        }
 
         # Skip AI accelerators
         if ($friendlyName -match '(?i)\bAI\b') { continue }
@@ -2606,7 +2688,7 @@ $btnCreateVM.Add_Click({
         $ISOPath         = $ctrlCreate["ISOPath"].Text.Trim()
         $Username        = $ctrlCreate["Username"].Text.Trim()
         $PasswordText    = $ctrlCreate["Password"].Text
-        $Password        = Convert-PlainTextToSecureString -Text $PasswordText
+        $Password        = $null
         $vCPU            = [int]$ctrlCreate["vCPU"].Value
         $MemGB           = [int]$ctrlCreate["Memory"].Value
         $DiskGB          = [int]$ctrlCreate["DiskSize"].Value
@@ -2671,18 +2753,11 @@ $btnCreateVM.Add_Click({
             $ctrlCreate["TPM"].Checked = $true
         }
 
-        # Parse resolution
-        $ResWidth = 1920; $ResHeight = 1080
-        $raw = $ctrlCreate["Resolution"].SelectedItem
-        if ($raw) {
-            $m = [regex]::Match([string]$raw, '^(\d+)\s*[xX\u00D7]\s*(\d+)$')
-            if ($m.Success) { $ResWidth = [int]$m.Groups[1].Value; $ResHeight = [int]$m.Groups[2].Value }
-        }
-
         # ---- Validate ----
         if ([string]::IsNullOrWhiteSpace($VMName)) { Write-Log "VM Name is required!" "ERROR"; return }
         if ($VMName -notmatch '^[a-zA-Z0-9_-]+$') { Write-Log "VM Name contains invalid characters. Use only letters, numbers, hyphens, underscores." "ERROR"; return }
-        if ($VMName.Length -gt 15) { Write-Log "VM Name must be 15 characters or less for NetBIOS compatibility" "ERROR"; return }
+        if ($VMName.Length -gt 64) { Write-Log "VM Name must be 64 characters or less." "ERROR"; return }
+        if ($VMName.Length -gt 15) { Write-Log "VM Name is longer than 15 characters. This is valid for Hyper-V, but may reduce compatibility with legacy NetBIOS-dependent workflows." "WARN" }
         if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) { Write-Log "A VM named '$VMName' already exists!" "ERROR"; return }
 
         if (-not $UseGoldenImage) {
@@ -2718,10 +2793,11 @@ $btnCreateVM.Add_Click({
         if ([string]::IsNullOrWhiteSpace($Username)) { Write-Log "Username is required!" "ERROR"; return }
         if ($Username -notmatch '^[a-zA-Z0-9]+$') { Write-Log "Username cannot contain special characters." "ERROR"; return }
         if ($Username -eq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
-        if (-not [string]::IsNullOrWhiteSpace($PasswordText) -and $PasswordText.Length -lt 8) {
-            Write-Log "Password must be at least 8 characters." "ERROR"
+        if (-not (Test-StrongPassword -Value $PasswordText)) {
+            Write-Log "Password must be at least 12 characters and include uppercase, lowercase, number, and special character." "ERROR"
             return
         }
+        $Password = Convert-PlainTextToSecureString -Text $PasswordText
         if ($EnableDynamicMem) {
             if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
                 Write-Log "Dynamic Memory minimum cannot be greater than maximum." "ERROR"
@@ -2853,6 +2929,10 @@ $btnCreateVM.Add_Click({
 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g338AXQGg338AnUNjUXYUOgs/P//WYlFvP916P8VABBAAOsCM/aNhUT///9WUOhr/P//WVlXVv8VbBBAAOlsAgAA9kX8Ag+FTgEAAIN9+ACLRfR1E4XAdQ85Rex1D4N98P4PhDIBAACD+AF9DotF+Jn3/40EQIlF9OsSg334AX0MweACagOZWff5iUX4aJQAAACNhUT///9qAFDoFgIAAItF9ItN+ItV8IlFtItF7IPEDIXAZseFaP///5QAiU2wiUWsiVW8fgqBhWz///8AAAQAhcl+CoGFbP///wAAGACD+v6+AABAAHU4gz2gHEAAAHQ1agD/FXgQQACL+IX/dBsBtWz///9qdFf/FRAQQABXagCJRbz/FWwQQACDffD+dAYBtWz///+LNXQQQACNhUT///9qAlD/1ov4hf91IItF/PfQwegDg+ABUI2FRP///1D/1mggFEAAi/j/0+sWi8dIdAdo/BNAAOsFaLATQADoj/r//4P//VkPhS8BAABoZBNAAOh7+v//WY2FRP///2oAUP/W6RQBAABoFBNAAP/TxwQkABNAAGj8EkAA6Gb6//9o6BJAAGjkEkAA6Ff6//9o1BJAAGjQEkAA6Ej6//+LdfyDxBgj93Q7aMASQADoS/r//8cEJLASQADoP/r//8cEJKASQADoM/r//8cEJJASQADoJ/r//8cEJIASQADoG/r//1locBJAAGhsEkAA6PT5//+DPaAcQAAAWVl1G4X2dBdoVBJAAOjy+f//xwQkRBJAAOjm+f//WWgkEkAAaCASQADov/n//2gIEkAAaAQSQADosPn//2jQEUAAaMwRQADoofn//2ikEUAAaKARQADokvn//2iEEUAAaIARQADog/n//2hsEUAAaGgRQADodPn//2gIEUAA/9ODxDRfXjPAW8nDzP8lQBBAAFWL7Gr/aIAUQABogBxAAGShAAAAAFBkiSUAAAAAg+wgU1ZXiWXog2X8AGoB/xVUEEAAWYMNpBxAAP+DDagcQAD//xVkEEAAiw2cHEAAiQj/FWAQQACLDZgcQACJCKFcEEAAiwCjrBxAAOjDAAAAgz14FEAAAHUMaHYcQAD/FVgQQABZ6JQAAABokBBAAGiMEEAA6H8AAAChlBxAAIlF2I1F2FD/NZAcQACNReBQjUXUUI1F5FD/FTAQQABoiBBAAGiEEEAA6EwAAAD/FVAQQACLTeCJCP914P911P915Oit+f//g8QwiUXcUP8VTBBAAItF7IsIiwmJTdBQUegPAAAAWVnDi2Xo/3XQ/xVEEEAA/yVIEEAA/yU0EEAAaAAAAwBoAAABAOgTAAAAWVnDM8DDw8zMzMzMzP8lPBBAAP8lOBBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAdAAAAAAAAAAAAAOQdAAAYEAAAlB0AAAAAAAAAAAAARB4AAGwQAAA4HQAAAAAAAAAAAABgHgAAEBAAACgdAAAAAAAAAAAAAJweAAAAEAAAVB0AAAAAAAAAAAAAvh4AACwQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGoeAAB4HgAAjB4AAAAAAABQHgAAAAAAANIdAADEHQAAuB0AAKwdAAAAAAAAqh4AAPgeAAAIHwAAfB8AAGgfAAC0HgAAyh4AANIeAADgHgAA6B4AAFYfAAAUHwAAKB8AADgfAABIHwAAAAAAABgeAADyHQAA/h0AACQeAAAsHgAAAAAAAAIDbHN0cmNweUEAAPkCbHN0cmNhdEEAAHQBR2V0VmVyc2lvbgAAygBHZXRDb21tYW5kTGluZUEAS0VSTkVMMzIuZGxsAACsAndzcHJpbnRmQQAbAENoYW5nZURpc3BsYXlTZXR0aW5nc0EAAAMCUmVsZWFzZURDAP0AR2V0REMAxQBFbnVtRGlzcGxheVNldHRpbmdzQQAAVVNFUjMyLmRsbAAAJQFHZXREZXZpY2VDYXBzAEdESTMyLmRsbABbAVJlZ0Nsb3NlS2V5AHsBUmVnUXVlcnlWYWx1ZUV4QQAAcgFSZWdPcGVuS2V5RXhBAEFEVkFQSTMyLmRsbAAAngJwcmludGYAAJkCbWVtc2V0AABNU1ZDUlQuZGxsAADTAF9leGl0AEgAX1hjcHRGaWx0ZXIASQJleGl0AABkAF9fcF9fX2luaXRlbnYAWABfX2dldG1haW5hcmdzAA8BX2luaXR0ZXJtAIMAX19zZXR1c2VybWF0aGVycgAAnQBfYWRqdXN0X2ZkaXYAAGoAX19wX19jb21tb2RlAABvAF9fcF9fZm1vZGUAAIEAX19zZXRfYXBwX3R5cGUAAMoAX2V4Y2VwdF9oYW5kbGVyMwAAtwBfY29udHJvbGZwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 "@
             [IO.File]::WriteAllBytes($tempExe, [Convert]::FromBase64String($base64))
+            $qresHash = (Get-FileHash -Path $tempExe -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($qresHash -ne $script:EmbeddedQResSha256) {
+                throw "Embedded QRes payload hash mismatch. Expected $($script:EmbeddedQResSha256), got $qresHash."
+            }
 
         # ---- Create SetupComplete.cmd ----
         Write-Log "Creating SetupComplete.cmd..."
@@ -2871,7 +2951,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $lines += @(
                 ':: --- Parsec ---'
                 'echo [%date% %time%] Downloading Parsec... >> %LOGFILE%'
-                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://builds.parsecgaming.com/package/parsec-windows.exe'' -OutFile ''%WORKDIR%\parsec.exe''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\parsec.exe''; if ($sig.Status -ne ''Valid'') { throw ''Parsec signature validation failed'' }" >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://builds.parsecgaming.com/package/parsec-windows.exe'' -OutFile ''%WORKDIR%\parsec.exe''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\parsec.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Parsec'') { throw ''Parsec signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] Parsec download/signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'echo [%date% %time%] Installing Parsec... >> %LOGFILE%'
                 'start /wait %WORKDIR%\parsec.exe /silent /percomputer /norun /vdd'
@@ -2886,7 +2966,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 'if errorlevel 1 (echo [%date% %time%] VB Cable download failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'if not exist "%WORKDIR%\VB" mkdir "%WORKDIR%\VB"'
                 'tar -xf %WORKDIR%\vb.zip -C %WORKDIR%\VB >> %LOGFILE% 2>&1'
-                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\VB\VBCABLE_Setup_x64.exe''; if ($sig.Status -ne ''Valid'') { throw ''VB Cable signature validation failed'' }" >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\VB\VBCABLE_Setup_x64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''VB[- ]Audio|Vincent Burel'') { throw ''VB Cable signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] VB Cable signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'start /wait %WORKDIR%\VB\VBCABLE_Setup_x64 -h -i -H -n'
                 ''
@@ -2900,7 +2980,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 'if errorlevel 1 (echo [%date% %time%] USBMMIDD download failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'if not exist "%WORKDIR%\usbmmidd_v2" mkdir "%WORKDIR%\usbmmidd_v2"'
                 'tar -xf %WORKDIR%\usbmmidd_v2.zip -C %WORKDIR% >> %LOGFILE% 2>&1'
-                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\usbmmidd_v2\deviceinstaller64.exe''; if ($sig.Status -ne ''Valid'') { throw ''USBMMIDD signature validation failed'' }" >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\usbmmidd_v2\deviceinstaller64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Amyuni'') { throw ''USBMMIDD signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
                 'if errorlevel 1 (echo [%date% %time%] USBMMIDD signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 '@echo off'
                 'setlocal DisableDelayedExpansion'
@@ -2985,8 +3065,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Update-CreateProgress -Percent 22 -Status "Generating unattended setup..."
             Write-Log "Generating Autounattend.xml..."
             $UnattendXMLPath = Join-Path $VMLoc "Autounattend.xml"
-            New-UnattendXml -VMName $VMName -Username $Username -Password $Password `
-                -ResWidth $ResWidth -ResHeight $ResHeight -IsWindows11 $IsWin11 |
+            New-UnattendXml -VMName $VMName -Username $Username -Password $Password -IsWindows11 $IsWin11 |
                 Out-File -FilePath $UnattendXMLPath -Encoding UTF8
 
             # Minimize plaintext password lifetime in memory
@@ -3688,6 +3767,7 @@ Write-Host ""
 try {
     [void]$form.ShowDialog()
 } catch {
+    Write-StartupTrace -Message "GUI ShowDialog fatal error: $($_.Exception.Message)" -Level 'ERROR'
     Write-Host "`n  FATAL: GUI error: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "  $($_.ScriptStackTrace)" -ForegroundColor DarkRed
     Write-Host "`n  Press Enter to exit..." -ForegroundColor Red

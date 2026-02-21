@@ -42,6 +42,7 @@ Hyper-V setup can be repetitive, especially when combining VM creation with GPU 
 - Hyper-V feature enabled
 - Administrator privileges
 - PowerShell (64-bit)
+- Strong local account password (minimum 12 chars with upper/lowercase, number, special)
 - PowerShell execution policy that allows local scripts (the launcher uses `RemoteSigned`)
 
 ## Project layout
@@ -61,6 +62,10 @@ Hyper-V setup can be repetitive, especially when combining VM creation with GPU 
 3. Accept elevation prompt.
 4. Configure VM options and optional GPU-P settings.
 5. Execute and monitor logs inside the app.
+
+Launch compatibility note:
+- The launcher now forces 64-bit Windows PowerShell for best Windows 10/11 compatibility.
+- If you start the script from `pwsh` (PowerShell 7), it auto-relaunches itself in Windows PowerShell 5.1.
 
 ### Optional: start from PowerShell
 
@@ -87,7 +92,8 @@ flowchart LR
 - Ensure ISO and destination paths are accessible.
 - Keep enough free disk space for VHD and drivers.
 - If launch is blocked by execution policy after downloading from the internet, run `Unblock-File .\HyperV-Toolkit.ps1` in PowerShell and retry.
-- Optional post-install downloads now require valid Authenticode signatures; if a package fails validation, that install step is skipped and logged.
+- First desktop sign-in is manual by design (autologon is disabled for safer credential handling).
+- Optional post-install downloads now require valid Authenticode signatures and expected signer identity; if validation fails, that install step is skipped and logged.
 
 ## Version
 

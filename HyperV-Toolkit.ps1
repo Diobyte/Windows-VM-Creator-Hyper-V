@@ -1899,8 +1899,11 @@ function Copy-GpuReferencedFiles {
                     }
                     $destPath = Join-Path "$MountLetter\Windows" $relative
                 } else {
-                    $relative = $srcFull.Substring($hostWindowsRoot.Length).TrimStart('\\')
-                    $destPath = Join-Path "$MountLetter\Windows" $relative
+                    # Non-DriverStore files (e.g. System32 user-mode DLLs) must NOT be copied into
+                    # the guest Windows directory. Transplanting host-version DLLs (OpenGL ICDs,
+                    # CUDA libraries, etc.) overwrites guest system files and causes guest OS freezes.
+                    Write-Log "Skipping non-DriverStore referenced GPU file (safe for guest stability): $srcFull" "INFO"
+                    continue
                 }
 
                 $destDir = Split-Path -Parent $destPath
@@ -2988,10 +2991,26 @@ function Set-GpuPartitionForVM {
     }
 
     if ($ConservativeProfile) {
-        if ($partitionValues.VRAM.Supported) { $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal }
-        if ($partitionValues.Encode.Supported) { $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal }
-        if ($partitionValues.Decode.Supported) { $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal }
-        if ($partitionValues.Compute.Supported) { $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal }
+        # Conservative profile: set both Optimal and Min so the hypervisor always
+        # guarantees a non-zero resource floor for the partition. Omitting Min leaves
+        # it at 0, allowing the GPU to allocate nothing to the guest, which causes
+        # driver initialisation failures and guest OS freezes.
+        if ($partitionValues.VRAM.Supported) {
+            $setParams['MinPartitionVRAM']     = $partitionValues.VRAM.Min
+            $setParams['OptimalPartitionVRAM'] = $partitionValues.VRAM.Optimal
+        }
+        if ($partitionValues.Encode.Supported) {
+            $setParams['MinPartitionEncode']     = $partitionValues.Encode.Min
+            $setParams['OptimalPartitionEncode'] = $partitionValues.Encode.Optimal
+        }
+        if ($partitionValues.Decode.Supported) {
+            $setParams['MinPartitionDecode']     = $partitionValues.Decode.Min
+            $setParams['OptimalPartitionDecode'] = $partitionValues.Decode.Optimal
+        }
+        if ($partitionValues.Compute.Supported) {
+            $setParams['MinPartitionCompute']     = $partitionValues.Compute.Min
+            $setParams['OptimalPartitionCompute'] = $partitionValues.Compute.Optimal
+        }
     } else {
         if ($partitionValues.VRAM.Supported) {
             $setParams['MinPartitionVRAM'] = $partitionValues.VRAM.Min
@@ -3028,8 +3047,11 @@ function Set-GpuPartitionForVM {
     }
 
     $vmConfig = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-    [UInt64]$targetLowMmio = 3GB
-    [UInt64]$targetHighMmio = 32GB
+    [UInt64]$targetLowMmio  = 3GB
+    # 128 GB high MMIO is the safe default for GPU-P. 32 GB is insufficient for
+    # GPUs with large framebuffers (e.g. 16 GB+ VRAM) and causes guest freezes
+    # when the hypervisor cannot map the full BAR2 aperture.
+    [UInt64]$targetHighMmio = 128GB
     if ($vmConfig) {
         if ([UInt64]$vmConfig.LowMemoryMappedIoSpace -gt $targetLowMmio) {
             $targetLowMmio = [UInt64]$vmConfig.LowMemoryMappedIoSpace

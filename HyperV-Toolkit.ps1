@@ -1634,6 +1634,143 @@ function Copy-GpuServiceDriver {
     }
 }
 
+function Get-GpuDriverStoreFolderNamePatterns {
+    param([string]$GpuVendor = "Auto")
+
+    if ($GpuVendor -eq "NVIDIA") {
+        return @('nv_*', 'nvhd*', 'nvlt*', 'nvmd*', 'nvra*', 'nvsr*', 'nvwm*', 'nvam*')
+    }
+    if ($GpuVendor -eq "AMD") {
+        return @('u0*', 'c0*', 'amd*', 'ati*')
+    }
+    if ($GpuVendor -eq "Intel") {
+        return @('igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit_d*')
+    }
+    return @('nv_*', 'nvhd*', 'nvlt*', 'nvmd*', 'nvra*', 'nvsr*', 'nvwm*', 'nvam*',
+             'u0*', 'c0*', 'amd*', 'ati*',
+             'igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit_d*')
+}
+
+function Remove-GuestGpuInjectedFilesFromManifest {
+    [CmdletBinding()]
+    param(
+        [string]$VMName,
+        [string]$MountLetter
+    )
+
+    $manifestPath = Join-Path "$MountLetter\" 'Windows\System32\HostDriverStore\GpuPvToolkit\InjectedFileManifest.txt'
+    if (-not (Test-Path $manifestPath)) {
+        return @{ Success = $true; Removed = 0 }
+    }
+
+    try {
+        $mountRoot = [System.IO.Path]::GetFullPath((Join-Path "$MountLetter\" '.'))
+        $mountRootLower = $mountRoot.ToLowerInvariant()
+        $entries = @(Get-Content -Path $manifestPath -ErrorAction SilentlyContinue | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $removed = 0
+
+        foreach ($entry in $entries) {
+            $relative = [string]$entry
+            if ($relative.StartsWith('\\') -or $relative -match '^[A-Za-z]:') { continue }
+
+            $target = Join-Path "$MountLetter\" $relative
+            $targetFull = [System.IO.Path]::GetFullPath($target)
+            if (-not $targetFull.ToLowerInvariant().StartsWith($mountRootLower)) { continue }
+
+            if (Test-Path $targetFull) {
+                try {
+                    Remove-Item -Path $targetFull -Force -ErrorAction Stop
+                    $removed++
+                } catch {
+                    Write-Log "[$VMName] Failed removing prior injected file '$relative': $($_.Exception.Message)" "WARN"
+                }
+            }
+        }
+
+        try {
+            Remove-Item -Path $manifestPath -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-Log "[$VMName] Could not remove old GPU injection manifest: $($_.Exception.Message)" "WARN"
+        }
+
+        if ($removed -gt 0) {
+            Write-Log "[$VMName] Removed $removed previously injected GPU file(s) from manifest." "INFO"
+        }
+        return @{ Success = $true; Removed = $removed }
+    } catch {
+        Write-Log "[$VMName] Manifest cleanup error: $($_.Exception.Message)" "WARN"
+        return @{ Success = $false; Removed = 0 }
+    }
+}
+
+function Save-GuestGpuInjectedFilesManifest {
+    [CmdletBinding()]
+    param(
+        [string]$VMName,
+        [string]$MountLetter,
+        [string[]]$RelativePaths
+    )
+
+    try {
+        $manifestDir = Join-Path "$MountLetter\" 'Windows\System32\HostDriverStore\GpuPvToolkit'
+        if (-not (Test-Path $manifestDir)) {
+            New-Item -Path $manifestDir -ItemType Directory -Force | Out-Null
+        }
+
+        $manifestPath = Join-Path $manifestDir 'InjectedFileManifest.txt'
+        $items = @($RelativePaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+        if ($items.Count -eq 0) {
+            if (Test-Path $manifestPath) {
+                Remove-Item -Path $manifestPath -Force -ErrorAction SilentlyContinue
+            }
+            return
+        }
+
+        Set-Content -Path $manifestPath -Value $items -Encoding UTF8 -Force
+        Write-Log "[$VMName] Saved GPU injection manifest with $($items.Count) file path(s)." "INFO"
+    } catch {
+        Write-Log "[$VMName] Failed to save GPU injection manifest: $($_.Exception.Message)" "WARN"
+    }
+}
+
+function Remove-GuestGpuDriverPayload {
+    [CmdletBinding()]
+    param(
+        [string]$VMName,
+        [string]$MountLetter,
+        [string]$GpuVendor = "Auto"
+    )
+
+    $repoPath = Join-Path "$MountLetter\" 'Windows\System32\HostDriverStore\FileRepository'
+    $removedFolders = 0
+
+    $manifestCleanup = Remove-GuestGpuInjectedFilesFromManifest -VMName $VMName -MountLetter $MountLetter
+    if (-not $manifestCleanup.Success) {
+        Write-Log "[$VMName] Proceeding despite manifest cleanup warnings." "WARN"
+    }
+
+    if (Test-Path $repoPath) {
+        $patterns = Get-GpuDriverStoreFolderNamePatterns -GpuVendor $GpuVendor
+        $targets = @()
+        foreach ($pattern in $patterns) {
+            $targets += @(Get-ChildItem -Path $repoPath -Directory -Filter $pattern -ErrorAction SilentlyContinue)
+        }
+        $targets = @($targets | Sort-Object FullName -Unique)
+
+        foreach ($folder in $targets) {
+            try {
+                Remove-Item -Path $folder.FullName -Recurse -Force -ErrorAction Stop
+                $removedFolders++
+            } catch {
+                Write-Log "[$VMName] Failed removing old guest GPU folder '$($folder.Name)': $($_.Exception.Message)" "WARN"
+            }
+        }
+    }
+
+    Write-Log "[$VMName] Guest GPU payload cleanup complete (folders removed: $removedFolders; manifest files removed: $($manifestCleanup.Removed))." "INFO"
+    return @{ Success = $true; RemovedFolders = $removedFolders; RemovedFiles = $manifestCleanup.Removed }
+}
+
 function Copy-GpuReferencedFiles {
     [CmdletBinding()]
     param(
@@ -1642,6 +1779,7 @@ function Copy-GpuReferencedFiles {
     )
 
     $copied = 0
+    $copiedRelativePaths = [System.Collections.Generic.List[string]]::new()
     try {
         if ([string]::IsNullOrWhiteSpace($MountLetter)) {
             return @{ Success = $false; Copied = 0 }
@@ -1727,6 +1865,11 @@ function Copy-GpuReferencedFiles {
                 try {
                     Copy-Item -Path $srcFull -Destination $destPath -Force -ErrorAction Stop
                     $copied++
+                    $destFull = [System.IO.Path]::GetFullPath($destPath)
+                    $relativeGuest = $destFull.Substring((Join-Path "$MountLetter\" '').Length).TrimStart('\\')
+                    if (-not [string]::IsNullOrWhiteSpace($relativeGuest)) {
+                        $copiedRelativePaths.Add($relativeGuest)
+                    }
                 } catch {
                     Write-Log "Failed to copy referenced GPU file '$srcFull': $($_.Exception.Message)" "WARN"
                 }
@@ -1739,10 +1882,10 @@ function Copy-GpuReferencedFiles {
             Write-Log "No referenced GPU files were copied from Win32_PnPSignedDriver associations. Continuing with HostDriverStore and service driver payloads." "WARN"
         }
 
-        return @{ Success = $true; Copied = $copied }
+        return @{ Success = $true; Copied = $copied; Paths = @($copiedRelativePaths | Sort-Object -Unique) }
     } catch {
         Write-Log "GPU referenced file copy error: $($_.Exception.Message)" "WARN"
-        return @{ Success = $false; Copied = $copied }
+        return @{ Success = $false; Copied = $copied; Paths = @($copiedRelativePaths | Sort-Object -Unique) }
     }
 }
 
@@ -2488,14 +2631,7 @@ function Get-GpuDriverStoreFolders {
     }
 
     # Method 2: Pattern-based matching (always runs as safety net)
-    $patterns = switch ($GpuVendor) {
-        "NVIDIA" { @('nv_*', 'nvhd*', 'nvlt*', 'nvmd*', 'nvra*', 'nvsr*', 'nvwm*', 'nvam*') }
-        "AMD"    { @('u0*', 'c0*', 'amd*', 'ati*') }
-        "Intel"  { @('igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit_d*') }
-        default  { @('nv_*', 'nvhd*', 'nvlt*', 'nvmd*', 'nvra*', 'nvsr*', 'nvwm*',
-                      'u0*', 'c0*', 'amd*', 'ati*',
-                      'igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit_d*') }
-    }
+    $patterns = Get-GpuDriverStoreFolderNamePatterns -GpuVendor $GpuVendor
     foreach ($p in $patterns) {
         Get-ChildItem $DriverStore -Directory -Filter $p -ErrorAction SilentlyContinue |
             ForEach-Object { $folders.Add($_) }
@@ -2797,7 +2933,6 @@ function Set-GpuPartitionForVM {
         Write-Log "[$VMName] Could not normalize VM memory mode before GPU-P apply: $($_.Exception.Message)" "WARN"
     }
 
-    $adapter = Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Select-Object -First 1
     $partitionValues = Get-GpuPartitionValues -VMName $VMName -Percentage $AllocationPercent
 
     $setParams = @{
@@ -6464,6 +6599,7 @@ $btnUpdateGPU.Add_Click({
             $mountLetter = $null
             $mountedByScript = $false
             $skipDriverInjection = $false
+            $skipHostDriverInjection = $false
             $gpuAdapterConfigured = $false
             $startVmPending = $false
 
@@ -6508,8 +6644,19 @@ $btnUpdateGPU.Add_Click({
 
                 # Remove existing GPU-P adapter
                 Start-Sleep -Seconds 2
-                Remove-VMGpuPartitionAdapter -VMName $VMName -Confirm:$false -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 1
+                $removeAttempt = 0
+                do {
+                    Remove-VMGpuPartitionAdapter -VMName $VMName -Confirm:$false -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 1
+                    $remainingAdapters = @(Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue)
+                    if ($remainingAdapters.Count -eq 0) { break }
+                    $removeAttempt++
+                } while ($removeAttempt -lt 3)
+
+                if ($remainingAdapters.Count -gt 0) {
+                    Write-Log "[$VMName] Could not fully remove existing GPU-P adapter/allocation entries after retries. Skipping for clean install safety." "ERROR"
+                    continue
+                }
 
                 # Add GPU-P adapter (unless "Remove" was selected)
                 if ($providerObj -and $null -ne $providerObj.Provider) {
@@ -6630,7 +6777,8 @@ $btnUpdateGPU.Add_Click({
                             Write-Log "$msg Strict checks enabled, skipping VM." "ERROR"
                             continue
                         }
-                        Write-Log "$msg Continuing because strict checks are disabled." "WARN"
+                        Write-Log "$msg Strict checks disabled: skipping host GPU file injection for boot stability." "WARN"
+                        $skipHostDriverInjection = $true
                     }
                 }
 
@@ -6640,11 +6788,30 @@ $btnUpdateGPU.Add_Click({
                         $guestNvidiaBranch = Get-DriverVersionBranch -VersionString $guestNvidiaVersion
                         Write-Log "[$VMName] Guest NVIDIA driver version detected: $guestNvidiaVersion (branch $guestNvidiaBranch)" "INFO"
                         if ($guestNvidiaBranch -ge 0 -and $hostNvidiaBranch -ge 0 -and $guestNvidiaBranch -ne $hostNvidiaBranch) {
-                            Write-Log "[$VMName] NVIDIA host/guest driver branch mismatch detected (host=$hostNvidiaBranch, guest=$guestNvidiaBranch). Host branch files will be injected." "WARN"
+                            if ($strictChecks) {
+                                Write-Log "[$VMName] NVIDIA host/guest driver branch mismatch detected (host=$hostNvidiaBranch, guest=$guestNvidiaBranch). Strict checks enabled: skipping VM to avoid mixed-branch freeze risk." "ERROR"
+                                continue
+                            }
+                            Write-Log "[$VMName] NVIDIA host/guest driver branch mismatch detected (host=$hostNvidiaBranch, guest=$guestNvidiaBranch). Strict checks disabled: skipping host GPU file injection for stability." "WARN"
+                            $skipHostDriverInjection = $true
                         }
                     } else {
                         Write-Log "[$VMName] No existing NVIDIA guest driver metadata found in HostDriverStore (fresh or non-NVIDIA guest state)." "INFO"
                     }
+                }
+
+                if ($skipHostDriverInjection) {
+                    if ($startAfterUpdate) {
+                        $startVmPending = $true
+                    }
+                    Write-Log "[$VMName] Host GPU file injection skipped to reduce boot-freeze risk. Keep guest and host GPU drivers on matching OS generation/branch, then rerun update." "WARN"
+                    continue
+                }
+
+                $cleanupResult = Remove-GuestGpuDriverPayload -VMName $VMName -MountLetter $mountLetter -GpuVendor $gpuVendor
+                if (-not $cleanupResult.Success) {
+                    Write-Log "[$VMName] Guest GPU payload cleanup failed; skipping VM to preserve clean-install guarantees." "ERROR"
+                    continue
                 }
 
                 # ---- Copy GPU drivers (smart or full) ----
@@ -6665,6 +6832,7 @@ $btnUpdateGPU.Add_Click({
                 if (-not $refCopy.Success) {
                     Write-Log "[$VMName] Referenced GPU file copy step reported failure; proceeding with HostDriverStore/service-driver-only path." "WARN"
                 }
+                Save-GuestGpuInjectedFilesManifest -VMName $VMName -MountLetter $mountLetter -RelativePaths $refCopy.Paths
 
                 if ($copySvcDriver) {
                     Copy-GpuServiceDriver -MountLetter $mountLetter -GPUName $(if ($providerObj -and $providerObj.Provider) { $providerObj.Friendly } else { "AUTO" })

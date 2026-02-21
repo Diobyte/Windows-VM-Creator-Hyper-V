@@ -2572,6 +2572,23 @@ function Set-GpuPartitionForVM {
         [int]$AllocationPercent = 100
     )
 
+    try {
+        $vmMemory = Get-VMMemory -VMName $VMName -ErrorAction Stop
+        if ($vmMemory -and $vmMemory.DynamicMemoryEnabled) {
+            $startupBytes = [UInt64]$vmMemory.Startup
+            if ($startupBytes -le 0) {
+                $startupBytes = [UInt64]$vmMemory.Minimum
+            }
+            if ($startupBytes -le 0) {
+                $startupBytes = 4GB
+            }
+            Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes $startupBytes -ErrorAction Stop
+            Write-Log "[$VMName] Dynamic Memory was enabled; switched to static memory for GPU-P stability." "WARN"
+        }
+    } catch {
+        Write-Log "[$VMName] Could not normalize VM memory mode before GPU-P apply: $($_.Exception.Message)" "WARN"
+    }
+
     $partitionValues = Get-GpuPartitionValues -VMName $VMName -Percentage $AllocationPercent
     Set-VMGpuPartitionAdapter -VMName $VMName `
         -MinPartitionVRAM $partitionValues.VRAM -MaxPartitionVRAM $partitionValues.VRAM -OptimalPartitionVRAM $partitionValues.VRAM `
@@ -3620,7 +3637,7 @@ $grpGPUSettings.Controls.Add($lblGpuAlloc)
 $ctrlGPU["GpuAllocSlider"] = New-Object System.Windows.Forms.TrackBar
 $ctrlGPU["GpuAllocSlider"].Minimum       = 10
 $ctrlGPU["GpuAllocSlider"].Maximum       = 100
-$ctrlGPU["GpuAllocSlider"].Value         = 100
+$ctrlGPU["GpuAllocSlider"].Value         = 80
 $ctrlGPU["GpuAllocSlider"].TickFrequency = 10
 $ctrlGPU["GpuAllocSlider"].SmallChange   = 5
 $ctrlGPU["GpuAllocSlider"].LargeChange   = 10
@@ -3630,7 +3647,7 @@ $ctrlGPU["GpuAllocSlider"].BackColor     = $theme.Surface
 $grpGPUSettings.Controls.Add($ctrlGPU["GpuAllocSlider"])
 
 $ctrlGPU["GpuAllocLabel"] = New-Object System.Windows.Forms.Label
-$ctrlGPU["GpuAllocLabel"].Text      = "100%"
+$ctrlGPU["GpuAllocLabel"].Text      = "80%"
 $ctrlGPU["GpuAllocLabel"].AutoSize  = $true
 $ctrlGPU["GpuAllocLabel"].Location  = New-Object System.Drawing.Point(406, 166)
 $ctrlGPU["GpuAllocLabel"].ForeColor = $theme.Success
@@ -3909,9 +3926,10 @@ function Update-MainLayout {
                 $gpuCtrl.Width    = $gpuRightW
             }
             $ctrlGPU["GpuSelector"].Width = [Math]::Max(180, $grpGPUSettings.Width - 70)
-            $ctrlGPU["GpuAllocSlider"].Width = [Math]::Max(120, $grpGPUSettings.Width - 200)
-            $allocLabelX = [Math]::Min($ctrlGPU["GpuAllocSlider"].Right + 8, $grpGPUSettings.Width - 48)
-            $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point([Math]::Max(8, $allocLabelX), $ctrlGPU["GpuAllocLabel"].Top)
+            $allocLabelX = [Math]::Max(8, $grpGPUSettings.Width - 62)
+            $ctrlGPU["GpuAllocLabel"].Location = New-Object System.Drawing.Point($allocLabelX, $ctrlGPU["GpuAllocLabel"].Top)
+            $sliderRight = $ctrlGPU["GpuAllocLabel"].Left - 14
+            $ctrlGPU["GpuAllocSlider"].Width = [Math]::Max(120, $sliderRight - $ctrlGPU["GpuAllocSlider"].Left)
 
             $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX, 388)
             if ($ctrlGPU["SelectionHint"]) { $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point($gpuRightX, 440) }

@@ -57,3 +57,4 @@ if %errorLevel% neq 0 (
 )
 
 endlocal
+exit /b %errorLevel%

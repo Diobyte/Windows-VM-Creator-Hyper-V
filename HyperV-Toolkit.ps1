@@ -169,6 +169,7 @@ $script:HostOsName = (Get-CimInstance Win32_OperatingSystem).Caption
 $script:HostBuild  = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuild
 $script:HostIsWin11 = ($script:HostBuild -ge $script:BUILD_WIN11_MIN)
 $script:HostIsWin11Pro = $script:HostOsName -match 'Windows 11.*(Pro|Enterprise|Education)'
+$script:HostArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
 try {
     $addGpuCmd = Get-Command Add-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
     $script:SupportsGpuInstancePath = ($addGpuCmd -and $addGpuCmd.Parameters.ContainsKey('InstancePath'))
@@ -300,8 +301,9 @@ function Invoke-MountCleanup {
             }
         }
 
-        # Dismount ISO if still mounted
-        if ($script:MountedISO -and $script:MountedISO.ImagePath) {
+        # Dismount ISO if still mounted (skip if already handled by tracked images loop)
+        if ($script:MountedISO -and $script:MountedISO.ImagePath -and
+            -not $script:TrackedMountedImages.ContainsKey($script:MountedISO.ImagePath)) {
             try {
                 if (Dismount-ImageRetry -ImagePath $script:MountedISO.ImagePath -MaxRetries 2) {
                     Write-Log "Cleanup dismounted mounted ISO." "OK"
@@ -311,6 +313,9 @@ function Invoke-MountCleanup {
             } finally {
                 $script:MountedISO = $null
             }
+        } elseif ($script:MountedISO) {
+            # ISO was already dismounted by tracked-images loop
+            $script:MountedISO = $null
         }
         Write-Log "Cleanup complete." "OK"
     } catch {
@@ -319,6 +324,11 @@ function Invoke-MountCleanup {
 }
 
 function Set-AutoPlay {
+    <#
+    .SYNOPSIS
+        Toggles AutoPlay on/off. Returns $true if the setting was changed (caller
+        should restore it later), $false if no change was needed.
+    #>
     param([bool]$Disable)
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers"
     $regName = "DisableAutoplay"
@@ -328,12 +338,12 @@ function Set-AutoPlay {
 
     if ($Disable -and $current -eq 0) {
         Set-ItemProperty -Path $regPath -Name $regName -Value 1
-        return 0  # was enabled, now disabled
+        return $true   # Changed: was enabled, now disabled
     } elseif (-not $Disable -and $current -eq 1) {
         Set-ItemProperty -Path $regPath -Name $regName -Value 0
-        return 1  # was disabled, now restored
+        return $true   # Changed: was disabled, now restored
     }
-    return $current
+    return $false      # No change needed
 }
 
 function Dismount-ImageRetry {
@@ -448,6 +458,7 @@ function Start-VMWithRetry {
             }
         }
     }
+    return $false
 }
 
 function Get-PathAvailableSpaceGB {
@@ -456,9 +467,25 @@ function Get-PathAvailableSpaceGB {
         $resolvedPath = (Resolve-Path -Path $Path -ErrorAction Stop).Path
         $root = [System.IO.Path]::GetPathRoot($resolvedPath)
         if (-not $root) { return -1 }
-        $driveName = $root.TrimEnd('\\').TrimEnd(':')
-        $drive = Get-PSDrive -Name $driveName -ErrorAction Stop
-        return [math]::Round(($drive.Free / 1GB), 2)
+
+        # Local drive path (e.g. C:\)
+        if ($root -match '^([A-Za-z]):\\') {
+            $driveInfo = New-Object System.IO.DriveInfo($matches[1])
+            if ($driveInfo.IsReady) {
+                return [math]::Round(($driveInfo.AvailableFreeSpace / 1GB), 2)
+            }
+        }
+
+        # Fallback for mapped drives via CIM
+        if ($root -match '^([A-Za-z]:)') {
+            $disk = Get-CimInstance -Query "SELECT FreeSpace FROM Win32_LogicalDisk WHERE DeviceID='$($matches[1])'" -ErrorAction SilentlyContinue
+            if ($disk -and $disk.FreeSpace) {
+                return [math]::Round(($disk.FreeSpace / 1GB), 2)
+            }
+        }
+
+        # UNC paths - space check not supported, return -1 (caller skips check)
+        return -1
     } catch {
         return -1
     }
@@ -466,14 +493,20 @@ function Get-PathAvailableSpaceGB {
 
 function Test-DirectoryWritable {
     param([string]$Path)
+    $testFile = $null
     try {
         if (-not (Test-Path -Path $Path)) { return $false }
         $testFile = Join-Path $Path ([System.Guid]::NewGuid().ToString() + '.tmp')
         Set-Content -Path $testFile -Value 'test' -Encoding ASCII -ErrorAction Stop
-        Remove-Item -Path $testFile -Force -ErrorAction Stop
+        Remove-Item -Path $testFile -Force -ErrorAction SilentlyContinue
+        $testFile = $null
         return $true
     } catch {
         return $false
+    } finally {
+        if ($testFile -and (Test-Path $testFile)) {
+            Remove-Item -Path $testFile -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -535,8 +568,15 @@ function Set-ToolkitNatSwitch {
         $natName = "$SwitchName-NAT"
         $existingNat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
         if (-not $existingNat) {
-            New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $NatPrefix -ErrorAction Stop | Out-Null
-            Write-Log "Created NAT object '$natName' with prefix $NatPrefix" "OK"
+            # Check for conflicting NAT or routes using the same subnet
+            $conflictingNat = Get-NetNat -ErrorAction SilentlyContinue |
+                Where-Object { $_.InternalIPInterfaceAddressPrefix -eq $NatPrefix -and $_.Name -ne $natName }
+            if ($conflictingNat) {
+                Write-Log "NAT subnet $NatPrefix already in use by '$($conflictingNat.Name)'. Reusing existing NAT." "WARN"
+            } else {
+                New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $NatPrefix -ErrorAction Stop | Out-Null
+                Write-Log "Created NAT object '$natName' with prefix $NatPrefix" "OK"
+            }
         }
 
         return $SwitchName
@@ -688,6 +728,19 @@ function ConvertTo-XmlEscapedValue {
     return [System.Security.SecurityElement]::Escape($Value)
 }
 
+function ConvertTo-UnattendPassword {
+    <#
+    .SYNOPSIS
+        Encodes a password for use in Windows Unattend XML with PlainText=false.
+        Windows format: base64( UTF-16LE( password + "Password" ) )
+    #>
+    param([AllowNull()][string]$PlainText)
+    if ([string]::IsNullOrEmpty($PlainText)) { return "" }
+    $combined = $PlainText + "Password"
+    $bytes = [System.Text.Encoding]::Unicode.GetBytes($combined)
+    return [Convert]::ToBase64String($bytes)
+}
+
 function Test-GpuPPreFlight {
     <#
     .SYNOPSIS
@@ -696,11 +749,14 @@ function Test-GpuPPreFlight {
     #>
     $issues = @()
 
+    # Fetch video controllers once for all checks
+    $videoControllers = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+
     # Check 1: Laptop NVIDIA GPU detection (unsupported for GPU-P)
     try {
         $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
         if ($battery) {
-            $nvidiaGpu = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'NVIDIA' }
+            $nvidiaGpu = $videoControllers | Where-Object { $_.Name -match 'NVIDIA' }
             if ($nvidiaGpu) {
                 $issues += "WARNING: Laptop NVIDIA GPUs are NOT supported for GPU-P. Intel integrated GPUs on laptops may work instead."
             }
@@ -711,7 +767,7 @@ function Test-GpuPPreFlight {
 
     # Check 2: AMD Polaris (RX 580 etc) - no hardware video encoding
     try {
-        $amdGpu = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'RX\s*5[678]0|Polaris' }
+        $amdGpu = $videoControllers | Where-Object { $_.Name -match 'RX\s*5[678]0|Polaris' }
         if ($amdGpu) {
             $issues += "WARNING: AMD Polaris GPUs (RX 580 etc) do not support hardware video encoding via GPU-PV."
         }
@@ -942,11 +998,17 @@ function Set-DetectedGuestDefaults {
 }
 
 function Invoke-DismApplyImage {
+    <#
+    .SYNOPSIS
+        Applies a WIM/ESD image using DISM with timeout protection.
+        Falls back from /Compact to normal mode on failure.
+    #>
     param(
         [string]$ImageFile,
         [int]$Index,
         [string]$ApplyDir,
-        [bool]$PreferCompactApply = $true
+        [bool]$PreferCompactApply = $true,
+        [int]$TimeoutMinutes = 60
     )
 
     $attempts = @()
@@ -957,7 +1019,28 @@ function Invoke-DismApplyImage {
 
     foreach ($attempt in $attempts) {
         Write-Log "DISM apply attempt: $($attempt.Label)"
-        $dismOutput = & dism @($attempt.Args) 2>&1
+        $dismArgs = $attempt.Args
+
+        # Run DISM in a background job with timeout to prevent indefinite hangs
+        $dismJob = Start-Job -ScriptBlock {
+            param($dismArgs)
+            $output = & dism @dismArgs 2>&1
+            return @{ Output = $output; ExitCode = $LASTEXITCODE }
+        } -ArgumentList (,$dismArgs)
+
+        $completed = Wait-Job $dismJob -Timeout ($TimeoutMinutes * 60)
+        if (-not $completed) {
+            Write-Log "DISM timed out after $TimeoutMinutes minutes ($($attempt.Label))" "ERROR"
+            Stop-Job $dismJob -ErrorAction SilentlyContinue
+            Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
+            continue
+        }
+
+        $result = Receive-Job $dismJob
+        Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
+
+        $dismOutput = $result.Output
+        $exitCode = $result.ExitCode
 
         foreach ($line in $dismOutput) {
             $lineStr = $line.ToString().Trim()
@@ -974,11 +1057,11 @@ function Invoke-DismApplyImage {
             }
         }
 
-        if ($LASTEXITCODE -eq 0) {
+        if ($exitCode -eq 0) {
             return
         }
 
-        Write-Log "DISM apply attempt failed ($($attempt.Label)) with exit code $LASTEXITCODE" "WARN"
+        Write-Log "DISM apply attempt failed ($($attempt.Label)) with exit code $exitCode" "WARN"
     }
 
     throw "DISM /Apply-Image failed for all compatibility attempts."
@@ -1021,19 +1104,19 @@ function New-UnattendXml {
 
     $xmlVMName       = ConvertTo-XmlEscapedValue -Value $VMName
     $xmlUsername     = ConvertTo-XmlEscapedValue -Value $Username
-    $xmlPassword     = ConvertTo-XmlEscapedValue -Value $passwordPlain
+    $xmlPasswordB64  = ConvertTo-UnattendPassword -PlainText $passwordPlain
     $xmlUiLang       = ConvertTo-XmlEscapedValue -Value $uiLang
     $xmlKeyboard     = ConvertTo-XmlEscapedValue -Value $keyboard
     $xmlSystemLoc    = ConvertTo-XmlEscapedValue -Value $systemLoc
     $xmlUserLoc      = ConvertTo-XmlEscapedValue -Value $userLoc
     $xmlTimezone     = ConvertTo-XmlEscapedValue -Value $timezone
+    $xmlArch         = $script:HostArch   # 'amd64' or 'arm64'
 
     # Build the BypassNRO command for specialize pass (helps Win11 offline setup)
     $bypassBlock = ""
     if ($IsWindows11) {
-        # NOTE: processorArchitecture is hardcoded to "amd64". ARM64 guests would need "arm64" here.
         $bypassBlock = @"
-    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
@@ -1050,7 +1133,7 @@ function New-UnattendXml {
   <settings pass="offlineServicing"></settings>
 
   <settings pass="windowsPE">
-    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <SetupUILanguage>
                 <UILanguage>$xmlUiLang</UILanguage>
       </SetupUILanguage>
@@ -1059,7 +1142,7 @@ function New-UnattendXml {
             <UILanguage>$xmlUiLang</UILanguage>
             <UserLocale>$xmlUserLoc</UserLocale>
     </component>
-    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+    <component name="Microsoft-Windows-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <UserData>
         <AcceptEula>true</AcceptEula>
       </UserData>
@@ -1070,7 +1153,7 @@ function New-UnattendXml {
   <settings pass="generalize"></settings>
 
   <settings pass="specialize">
-    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
             <ComputerName>$xmlVMName</ComputerName>
             <TimeZone>$xmlTimezone</TimeZone>
     </component>
@@ -1078,13 +1161,13 @@ $bypassBlock
   </settings>
 
   <settings pass="oobeSystem">
-    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
             <InputLocale>$xmlKeyboard</InputLocale>
             <SystemLocale>$xmlSystemLoc</SystemLocale>
             <UILanguage>$xmlUiLang</UILanguage>
             <UserLocale>$xmlUserLoc</UserLocale>
     </component>
-    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <UserAccounts>
         <LocalAccounts>
           <LocalAccount wcm:action="add">
@@ -1092,8 +1175,8 @@ $bypassBlock
                         <DisplayName>$xmlUsername</DisplayName>
             <Group>Administrators</Group>
             <Password>
-                            <Value>$xmlPassword</Value>
-              <PlainText>true</PlainText>
+                            <Value>$xmlPasswordB64</Value>
+              <PlainText>false</PlainText>
             </Password>
           </LocalAccount>
         </LocalAccounts>
@@ -1103,8 +1186,8 @@ $bypassBlock
         <Enabled>true</Enabled>
         <LogonCount>3</LogonCount>
         <Password>
-                    <Value>$xmlPassword</Value>
-          <PlainText>true</PlainText>
+                    <Value>$xmlPasswordB64</Value>
+          <PlainText>false</PlainText>
         </Password>
       </AutoLogon>
       <OOBE>
@@ -1269,10 +1352,20 @@ function Copy-DriversToVhd {
             if ($LASTEXITCODE -gt 7) {
                 Write-Log "[$VMName] Robocopy returned exit code $LASTEXITCODE" "WARN"
                 # Fallback to Copy-Item
-                Copy-Item -Path (Join-Path $Source $FileMask) -Destination $target -Recurse -Force -ErrorAction Stop
+                $srcPath = Join-Path $Source $FileMask
+                if (Test-Path $srcPath) {
+                    Copy-Item -Path $srcPath -Destination $target -Recurse -Force -ErrorAction Stop
+                } else {
+                    Write-Log "[$VMName] Source path not found for fallback copy: $srcPath" "WARN"
+                }
             }
         } else {
-            Copy-Item -Path (Join-Path $Source $FileMask) -Destination $target -Recurse -Force -ErrorAction Stop
+            $srcPath = Join-Path $Source $FileMask
+            if (Test-Path $srcPath) {
+                Copy-Item -Path $srcPath -Destination $target -Recurse -Force -ErrorAction Stop
+            } else {
+                Write-Log "[$VMName] No files matching '$FileMask' in $Source" "WARN"
+            }
         }
     } catch {
         Write-Log "[$VMName] ERROR copying files: $($_.Exception.Message)" "ERROR"
@@ -1460,9 +1553,9 @@ function Set-GpuPartitionForVM {
         -MinPartitionEncode $partitionValues.Encode -MaxPartitionEncode $partitionValues.Encode -OptimalPartitionEncode $partitionValues.Encode `
         -MinPartitionDecode $partitionValues.Decode -MaxPartitionDecode $partitionValues.Decode -OptimalPartitionDecode $partitionValues.Decode `
         -MinPartitionCompute $partitionValues.Compute -MaxPartitionCompute $partitionValues.Compute -OptimalPartitionCompute $partitionValues.Compute
-    Set-VM -VMName $VMName -GuestControlledCacheTypes $true
-    Set-VM -VMName $VMName -LowMemoryMappedIoSpace 1GB
-    Set-VM -VMName $VMName -HighMemoryMappedIoSpace 32GB
+    Set-VM -VMName $VMName -GuestControlledCacheTypes $true -ErrorAction Stop
+    Set-VM -VMName $VMName -LowMemoryMappedIoSpace 1GB -ErrorAction Stop
+    Set-VM -VMName $VMName -HighMemoryMappedIoSpace 32GB -ErrorAction Stop
 }
 
 #endregion
@@ -1895,7 +1988,7 @@ $ctrlGPU["VMCheckboxes"] = @()
 
 function Update-VMList {
     $vmPanel.Controls.Clear()
-    $script:gpuVMCheckboxes = @()
+    $checkboxes = @()
     $filterText = ""
     if ($ctrlGPU.ContainsKey("VmSearch") -and $ctrlGPU["VmSearch"]) {
         $filterText = [string]$ctrlGPU["VmSearch"].Text
@@ -1912,10 +2005,10 @@ function Update-VMList {
         $cb.Location = New-Object System.Drawing.Point(8, $y)
         $cb.ForeColor = [System.Drawing.Color]::White
         $vmPanel.Controls.Add($cb)
-        $script:gpuVMCheckboxes += $cb
+        $checkboxes += $cb
         $y += 26
     }
-    $ctrlGPU["VMCheckboxes"] = $script:gpuVMCheckboxes
+    $ctrlGPU["VMCheckboxes"] = $checkboxes
 }
 Update-VMList
 
@@ -2358,7 +2451,7 @@ $btnBrowseISO.Add_Click({
             $script:MountedISO = Mount-DiskImage -ImagePath $dlg.FileName -PassThru
             Register-TrackedMountedImage -ImagePath $dlg.FileName
             Start-Sleep -Seconds 2
-            $isoVolume = $script:MountedISO | Get-DiskImage | Get-Volume | Where-Object { $_.DriveLetter }
+            $isoVolume = $script:MountedISO | Get-Volume | Where-Object { $_.DriveLetter }
             if (-not $isoVolume -or -not $isoVolume.DriveLetter) {
                 Write-Log "ISO mounted but no drive letter was assigned. Try dismounting and re-mounting." "ERROR"
                 return
@@ -2612,7 +2705,7 @@ $btnCreateVM.Add_Click({
         }
         if (-not (Test-DirectoryWritable -Path $VMLocBase)) { Write-Log "VM Location is not writable: $VMLocBase" "ERROR"; return }
 
-        $requiredDiskGB = if ($FixedVHD) { $DiskGB + 8 } else { 16 }  # Fixed VHD needs full size; dynamic only needs ~16 GB initially
+        $requiredDiskGB = if ($FixedVHD) { $DiskGB + 8 } else { 24 }  # Fixed VHD needs full size; dynamic needs ~24 GB initially (OS + pagefile + drivers)
         $freeDiskGB = Get-PathAvailableSpaceGB -Path $VMLocBase
         if ($freeDiskGB -ge 0 -and $freeDiskGB -lt $requiredDiskGB) {
             Write-Log "Insufficient disk space in VM location. Need about $requiredDiskGB GB free, found $freeDiskGB GB." "ERROR"
@@ -2731,8 +2824,7 @@ $btnCreateVM.Add_Click({
         Write-Log "========================================" "INFO"
 
         # ---- Disable AutoPlay ----
-        $originalAutoPlay = Set-AutoPlay -Disable $true
-        $autoPlayChanged = $true
+        $autoPlayChanged = Set-AutoPlay -Disable $true
 
         # ---- Create VM directory ----
         Update-CreateProgress -Percent 10 -Status "Creating VM workspace..."
@@ -2891,6 +2983,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
             # Minimize plaintext password lifetime in memory
             $PasswordText = $null
+            if ($Password) {
+                try { $Password.Dispose() } catch { }
+                $Password = $null
+            }
 
             # ---- Create VHDX ----
             Update-CreateProgress -Percent 30 -Status "Creating virtual disk..."
@@ -2908,6 +3004,8 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Write-Log "Mounting VHD and creating GPT/EFI/MSR/Windows partitions..."
             $mountedVHD = Mount-VHD -Path $VHDPath -Passthru
             Register-TrackedMountedImage -ImagePath $VHDPath
+            $vhdMountedForDeploy = $true
+            try {
             $diskNumber = $mountedVHD.DiskNumber
             Initialize-Disk -Number $diskNumber -PartitionStyle GPT -PassThru | Out-Null
 
@@ -3055,7 +3153,9 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 $attachISOForRecovery = $true
             }
 
-            # ---- Dismount VHD and ISO ----
+            } finally {
+            # ---- Dismount VHD (in finally to guarantee cleanup) ----
+            if ($vhdMountedForDeploy -and $VHDPath) {
             Update-CreateProgress -Percent 80 -Status "Finalizing disk images..."
             if (Dismount-ImageRetry -ImagePath $VHDPath) {
                 Write-Log "VHD dismounted."
@@ -3067,6 +3167,8 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                     Write-Log "VHD dismount fallback failed: $($_.Exception.Message)" "WARN"
                 }
                 Write-Log "VHD dismount required fallback and may still be attached." "WARN"
+            }
+            }
             }
 
             if ($script:MountedISO) {
@@ -3088,7 +3190,6 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             if (-not (Test-Path $GoldenParentVHD)) {
                 throw "Golden parent VHDX not found: $GoldenParentVHD"
             }
-            $parentSize = (Get-Item $GoldenParentVHD).Length
             $destDrive  = (Split-Path -Qualifier $VMLoc)
             $destFree   = (Get-PSDrive ($destDrive.TrimEnd(':'))).Free
             # Differencing disk starts small but grows; ensure at least 2 GB headroom
@@ -3099,6 +3200,9 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Write-Log "Creating differencing VHDX from parent: $GoldenParentVHD"
             New-VHD -Path $VHDPath -ParentPath $GoldenParentVHD -Differencing | Out-Null
             Write-Log "Golden image differencing disk created." "OK"
+            Write-Log "WARNING: Golden Image mode cannot auto-detect the guest OS version." "WARN"
+            Write-Log "  - Secure Boot / TPM settings use your selections; verify they match the parent image OS." "WARN"
+            Write-Log "  - If the parent is Windows 11, ensure Secure Boot and TPM are both enabled." "WARN"
         }
 
         # ---- Create Hyper-V VM ----
@@ -3107,7 +3211,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         New-VM -Name $VMName -MemoryStartupBytes ($MemGB * 1GB) -Generation 2 -VHDPath $VHDPath -Path $VMLoc -SwitchName $VMSwitch | Out-Null
 
         # Processor
-        Set-VM -Name $VMName -ProcessorCount $vCPU
+        Set-VM -Name $VMName -ProcessorCount $vCPU -ErrorAction Stop
         Write-Log "  vCPUs: $vCPU"
 
         if ($EnableVmNotes) {
@@ -3136,7 +3240,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
 
         # Checkpoints
-        Set-VM -Name $VMName -CheckpointType $CheckpointMode
+        Set-VM -Name $VMName -CheckpointType $CheckpointMode -ErrorAction Stop
         Write-Log "  Checkpoint Mode: $CheckpointMode"
 
         # Dynamic Memory
@@ -3252,7 +3356,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Remove-PartialVmArtifacts -VMName $VMName -VMLoc $VMLoc -VHDPath $VHDPath
         }
     } finally {
-        if ($autoPlayChanged -and $originalAutoPlay -eq 0) {
+        if ($autoPlayChanged) {
             try {
                 Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers" -Name "DisableAutoplay" -Value 0
             } catch {
@@ -3317,8 +3421,7 @@ $btnUpdateGPU.Add_Click({
         Write-Log "========================================" "INFO"
 
         # Disable AutoPlay
-        $originalAutoPlay = Set-AutoPlay -Disable $true
-        $autoPlayChanged = $true
+        $autoPlayChanged = Set-AutoPlay -Disable $true
 
         foreach ($VMName in $selectedVMs) {
             $vhdPath = $null
@@ -3533,7 +3636,7 @@ $btnUpdateGPU.Add_Click({
     } catch {
         Write-ErrorWithGuidance -Context "GPU update" -ErrorRecord $_
     } finally {
-        if ($autoPlayChanged -and $originalAutoPlay -eq 0) {
+        if ($autoPlayChanged) {
             try {
                 Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers" -Name "DisableAutoplay" -Value 0
             } catch {

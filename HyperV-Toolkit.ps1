@@ -1895,7 +1895,7 @@ $grpBoot.Text      = "Boot && Hardware - Security"
 $grpBoot.ForeColor = [System.Drawing.Color]::White
 $grpBoot.Location  = New-Object System.Drawing.Point(540, 18)
 $grpBoot.Size      = New-Object System.Drawing.Size(500, 124)
-$grpBoot.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$grpBoot.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $tabCreate.Controls.Add($grpBoot)
 
 $ctrlCreate["SecureBoot"] = New-Object System.Windows.Forms.CheckBox
@@ -1928,7 +1928,7 @@ $grpOpts.Text      = "VM Options - Runtime"
 $grpOpts.ForeColor = [System.Drawing.Color]::White
 $grpOpts.Location  = New-Object System.Drawing.Point(540, 148)
 $grpOpts.Size      = New-Object System.Drawing.Size(500, 165)
-$grpOpts.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$grpOpts.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $tabCreate.Controls.Add($grpOpts)
 
 $chkNames = @(
@@ -1964,7 +1964,7 @@ $grpSoft.Text      = "Post-Install Software && Advanced"
 $grpSoft.ForeColor = [System.Drawing.Color]::White
 $grpSoft.Location  = New-Object System.Drawing.Point(540, 318)
 $grpSoft.Size      = New-Object System.Drawing.Size(500, 240)
-$grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $tabCreate.Controls.Add($grpSoft)
 
 $softwareChecks = @(
@@ -2012,6 +2012,19 @@ $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 16)
 $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 580)
 $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
 $tabCreate.Controls.Add($ctrlCreate["ValidationHint"])
+
+# Handle tab resize to move and scale right GroupBoxes
+$tabControl.Add_Resize({
+    $w = $tabControl.ClientSize.Width
+    $newX = 540
+    $newWidth = [Math]::Max(500, $w - 540 - 8)
+    $grpBoot.Location = New-Object System.Drawing.Point($newX, 18)
+    $grpBoot.Size = New-Object System.Drawing.Size($newWidth, 124)
+    $grpOpts.Location = New-Object System.Drawing.Point($newX, 148)
+    $grpOpts.Size = New-Object System.Drawing.Size($newWidth, 165)
+    $grpSoft.Location = New-Object System.Drawing.Point($newX, 318)
+    $grpSoft.Size = New-Object System.Drawing.Size($newWidth, 240)
+})
 
 # Create VM Button
 $btnCreateVM           = New-Object System.Windows.Forms.Button

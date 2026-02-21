@@ -252,6 +252,7 @@ $script:WimFile             = $null
 $script:EditionMap          = @{}
 $script:DetectedWinVersion  = ""      # "Windows 10" or "Windows 11"
 $script:DetectedBuild       = 0       # e.g. 19045, 22621
+$script:DetectedGuestArch   = $script:HostArch  # guest architecture for unattend (amd64/arm64)
 $script:LogBox              = $null   # Set when GUI is built
 $script:IsCreating          = $false  # Re-entrancy guard for VM creation
 $script:IsUpdatingGPU       = $false  # Re-entrancy guard for GPU update
@@ -410,6 +411,26 @@ function Set-AutoPlay {
         return $true   # Changed: was disabled, now restored
     }
     return $false      # No change needed
+}
+
+function Get-AutoPlayState {
+    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers"
+    $regName = "DisableAutoplay"
+    try {
+        return [int](Get-ItemProperty -Path $regPath -Name $regName -ErrorAction Stop).$regName
+    } catch {
+        return 0
+    }
+}
+
+function Restore-AutoPlayState {
+    param([AllowNull()][int]$State)
+
+    if ($null -eq $State) { return }
+
+    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers"
+    $regName = "DisableAutoplay"
+    Set-ItemProperty -Path $regPath -Name $regName -Value $State -ErrorAction Stop
 }
 
 function Dismount-ImageRetry {
@@ -831,6 +852,18 @@ function ConvertTo-UnattendPassword {
     return [Convert]::ToBase64String($bytes)
 }
 
+function ConvertTo-UnattendArchitecture {
+    param([AllowNull()][string]$Architecture)
+
+    if ([string]::IsNullOrWhiteSpace($Architecture)) { return "" }
+
+    switch -Regex ($Architecture.Trim().ToLowerInvariant()) {
+        '^(amd64|x64)$'      { return 'amd64' }
+        '^(arm64|aarch64)$'  { return 'arm64' }
+        default              { return "" }
+    }
+}
+
 function Test-GpuPPreFlight {
     <#
     .SYNOPSIS
@@ -980,7 +1013,7 @@ function Get-WimVersionInfo {
     #>
     param([string]$WimFile, [int]$Index = 1)
 
-    $result = [PSCustomObject]@{ WinVersion = "Unknown"; Build = 0 }
+    $result = [PSCustomObject]@{ WinVersion = "Unknown"; Build = 0; Architecture = "" }
 
     try {
         $wimInfo = dism /Get-WimInfo /WimFile:"$WimFile" /Index:$Index /English 2>&1
@@ -994,6 +1027,13 @@ function Get-WimVersionInfo {
                 if ($name -match 'Windows 11') { $result.WinVersion = "Windows 11" }
                 elseif ($name -match 'Windows 10') { $result.WinVersion = "Windows 10" }
                 elseif ($name -match 'Windows Server') { $result.WinVersion = "Windows Server" }
+            }
+            if ($line -match '^Architecture\s*:\s*(.+)$') {
+                $archRaw = $matches[1].Trim()
+                $normalizedArch = ConvertTo-UnattendArchitecture -Architecture $archRaw
+                if ($normalizedArch) {
+                    $result.Architecture = $normalizedArch
+                }
             }
         }
         # Fallback: build >= 22000 is Windows 11
@@ -1073,7 +1113,8 @@ function Set-DetectedGuestDefaults {
     )
 
     if ($Controls.ContainsKey('OSInfo') -and $Controls['OSInfo']) {
-        $Controls['OSInfo'].Text = "$($Profile.Name)  (Build $($Profile.Build))"
+        $guestArchLabel = if ([string]::IsNullOrWhiteSpace($script:DetectedGuestArch)) { 'unknown' } else { $script:DetectedGuestArch }
+        $Controls['OSInfo'].Text = "$($Profile.Name)  (Build $($Profile.Build), $guestArchLabel)"
     }
     if ($Controls.ContainsKey('SecureBoot') -and $Controls['SecureBoot']) {
         $Controls['SecureBoot'].Checked = [bool]$Profile.DefaultSecureBoot
@@ -1167,7 +1208,8 @@ function New-UnattendXml {
         [string]$Username,
         [AllowNull()][System.Security.SecureString]$Password,
         [bool]$EnableAutoLogon = $true,
-        [bool]$IsWindows11 = $false
+        [bool]$IsWindows11 = $false,
+        [AllowNull()][string]$GuestArch = ""
     )
 
     $passwordPlain = Convert-SecureStringToPlainText -SecureString $Password
@@ -1199,7 +1241,13 @@ function New-UnattendXml {
     $xmlSystemLoc    = ConvertTo-XmlEscapedValue -Value $systemLoc
     $xmlUserLoc      = ConvertTo-XmlEscapedValue -Value $userLoc
     $xmlTimezone     = ConvertTo-XmlEscapedValue -Value $timezone
-    $xmlArch         = $script:HostArch   # 'amd64' or 'arm64'
+    $xmlArch = ConvertTo-UnattendArchitecture -Architecture $GuestArch
+    if (-not $xmlArch) {
+        $xmlArch = ConvertTo-UnattendArchitecture -Architecture $script:DetectedGuestArch
+    }
+    if (-not $xmlArch) {
+        $xmlArch = $script:HostArch   # fallback: 'amd64' or 'arm64'
+    }
 
     # Build the BypassNRO command for specialize pass (helps Win11 offline setup)
     $bypassBlock = ""
@@ -1712,11 +1760,11 @@ $tabControl.SizeMode   = [System.Windows.Forms.TabSizeMode]::Fixed
 $tabControl.Padding    = New-Object System.Drawing.Point(14, 4)
 $tabControl.BackColor  = $theme.Card
 $tabControl.Add_DrawItem({
-    param($tabSender, $e)
-    if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabSender.TabPages.Count) { return }
+    param($tabCtrl, $e)
+    if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $tabCtrl.TabPages.Count) { return }
 
     $isSelected = ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -eq [System.Windows.Forms.DrawItemState]::Selected
-    $tabPage = $tabSender.TabPages[$e.Index]
+    $tabPage = $tabCtrl.TabPages[$e.Index]
     $rect = $e.Bounds
 
     $bg = if ($isSelected) { $theme.Accent } else { $theme.Surface }
@@ -1729,7 +1777,7 @@ $tabControl.Add_DrawItem({
     [System.Windows.Forms.TextRenderer]::DrawText(
         $e.Graphics,
         $tabText,
-        $tabSender.Font,
+        $tabCtrl.Font,
         $rect,
         $fg,
         [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
@@ -2890,7 +2938,7 @@ $toolTip.SetToolTip($btnExit, "Close the toolkit and run image mount cleanup.")
 Update-VMList
 
 $form.Add_KeyDown({
-    param($sender, $e)
+    param($eventSourceControl, $e)
     if (-not $e -or -not $e.Control) { return }
 
     if ($e.KeyCode -eq [System.Windows.Forms.Keys]::L) {
@@ -2985,6 +3033,8 @@ $btnBrowseISO.Add_Click({
                 $versionInfo = Get-WimVersionInfo -WimFile $script:WimFile -Index $firstIndex
                 $script:DetectedWinVersion = $versionInfo.WinVersion
                 $script:DetectedBuild      = $versionInfo.Build
+                $script:DetectedGuestArch  = if ($versionInfo.Architecture) { $versionInfo.Architecture } else { $script:HostArch }
+                Write-Log "Detected guest architecture: $($script:DetectedGuestArch)" "INFO"
 
                 $detectedProfile = Resolve-GuestWindowsProfile -DetectedWinVersion $script:DetectedWinVersion -DetectedBuild $script:DetectedBuild
                 Set-DetectedGuestDefaults -Controls $ctrlCreate -Profile $detectedProfile -EmitLog
@@ -3077,6 +3127,7 @@ function Update-CreateValidationHint {
     $vmName = if ($ctrlCreate.ContainsKey("VMName") -and $ctrlCreate["VMName"]) { [string]$ctrlCreate["VMName"].Text } else { "" }
     $isoPath = if ($ctrlCreate.ContainsKey("ISOPath") -and $ctrlCreate["ISOPath"]) { [string]$ctrlCreate["ISOPath"].Text } else { "" }
     $userName = if ($ctrlCreate.ContainsKey("Username") -and $ctrlCreate["Username"]) { [string]$ctrlCreate["Username"].Text } else { "" }
+    $passwordText = if ($ctrlCreate.ContainsKey("Password") -and $ctrlCreate["Password"]) { [string]$ctrlCreate["Password"].Text } else { "" }
     $switchSelected = ($ctrlCreate.ContainsKey("Switch") -and $ctrlCreate["Switch"] -and $ctrlCreate["Switch"].SelectedItem)
     $autoSwitch = ($ctrlCreate.ContainsKey("AutoCreateSwitch") -and $ctrlCreate["AutoCreateSwitch"] -and $ctrlCreate["AutoCreateSwitch"].Checked)
     $useGolden = ($ctrlCreate.ContainsKey("GoldenImage") -and $ctrlCreate["GoldenImage"] -and $ctrlCreate["GoldenImage"].Checked)
@@ -3086,19 +3137,28 @@ function Update-CreateValidationHint {
     $sourceOk = if ($useGolden) {
         -not [string]::IsNullOrWhiteSpace($goldenPath) -and (Test-Path $goldenPath)
     } else {
-        -not [string]::IsNullOrWhiteSpace($isoPath) -and (Test-Path $isoPath)
+        $isoPathOk = (-not [string]::IsNullOrWhiteSpace($isoPath)) -and (Test-Path $isoPath)
+        $isoMountedMatches = $false
+        if ($script:MountedISO -and $script:MountedISO.ImagePath) {
+            $mountedIsoPath = [string]$script:MountedISO.ImagePath
+            $isoMountedMatches = ($mountedIsoPath.Trim().ToLowerInvariant() -eq $isoPath.Trim().ToLowerInvariant())
+        }
+        $editionSelected = ($ctrlCreate.ContainsKey("Edition") -and $ctrlCreate["Edition"] -and $ctrlCreate["Edition"].SelectedItem)
+        $wimReady = (-not [string]::IsNullOrWhiteSpace($script:WimFile)) -and (Test-Path $script:WimFile) -and $editionSelected
+        ($isoPathOk -and $isoMountedMatches -and $wimReady)
     }
     $networkOk = ($switchSelected -or $autoSwitch)
     $userOk = (-not [string]::IsNullOrWhiteSpace($userName)) -and ($userName -match '^[a-zA-Z0-9]+$') -and ($userName -ne $vmName)
+    $passwordOk = (-not [string]::IsNullOrWhiteSpace($passwordText))
 
     $tick = [char]0x2713
     $cross = [char]0x2717
-    $isReady = ($nameOk -and $sourceOk -and $networkOk -and $userOk)
-    $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross})"
+    $isReady = ($nameOk -and $sourceOk -and $networkOk -and $userOk -and $passwordOk)
+    $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross}) | Password $(if($passwordOk){$tick}else{$cross})"
 
     if ($isReady) {
         $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::LimeGreen
-    } elseif ($nameOk -or $sourceOk -or $networkOk -or $userOk) {
+    } elseif ($nameOk -or $sourceOk -or $networkOk -or $userOk -or $passwordOk) {
         $ctrlCreate["ValidationHint"].ForeColor = [System.Drawing.Color]::Gold
     } else {
         $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
@@ -3114,6 +3174,7 @@ function Update-CreateValidationHint {
             if (-not $sourceOk) { $missing += $(if ($useGolden) { "parent VHD" } else { "ISO/source" }) }
             if (-not $networkOk) { $missing += "network" }
             if (-not $userOk) { $missing += "user" }
+            if (-not $passwordOk) { $missing += "password" }
             $ctrlCreate["CreateStatus"].Text = "Fix required: $($missing -join ', ')"
             $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Gold
         }
@@ -3250,6 +3311,8 @@ $ctrlCreate["Edition"].Add_SelectedIndexChanged({
         $versionInfo = Get-WimVersionInfo -WimFile $script:WimFile -Index $idx
         $script:DetectedWinVersion = $versionInfo.WinVersion
         $script:DetectedBuild      = $versionInfo.Build
+        $script:DetectedGuestArch  = if ($versionInfo.Architecture) { $versionInfo.Architecture } else { $script:HostArch }
+        Write-Log "Detected guest architecture: $($script:DetectedGuestArch)" "INFO"
         $detectedProfile = Resolve-GuestWindowsProfile -DetectedWinVersion $script:DetectedWinVersion -DetectedBuild $script:DetectedBuild
         Set-DetectedGuestDefaults -Controls $ctrlCreate -Profile $detectedProfile
     }
@@ -3271,6 +3334,7 @@ $ctrlCreate["VMName"].Add_TextChanged({ Update-CreateValidationHint })
 $ctrlCreate["ISOPath"].Add_TextChanged({ Update-CreateValidationHint })
 $ctrlCreate["GoldenParentVHD"].Add_TextChanged({ Update-CreateValidationHint })
 $ctrlCreate["Username"].Add_TextChanged({ Update-CreateValidationHint })
+$ctrlCreate["Password"].Add_TextChanged({ Update-CreateValidationHint })
 $ctrlCreate["Switch"].Add_SelectedIndexChanged({ Update-RoutingHint; Update-CreateValidationHint })
 
 Update-GpuActionState
@@ -3289,8 +3353,12 @@ $btnCreateVM.Add_Click({
     $preflightLines = @()
     $rollbackNeeded = $false
     $autoPlayChanged = $false
+    $autoPlayOriginalState = $null
     $vhdMountedForDeploy = $false
     $vmFolderCreatedByScript = $false
+    $tempExe = $null
+    $cmdFile = $null
+    $UnattendXMLPath = $null
 
     try {
         Update-CreateProgress -Percent 2 -Status "Validating VM settings..."
@@ -3408,6 +3476,7 @@ $btnCreateVM.Add_Click({
         if ([string]::IsNullOrWhiteSpace($Username)) { Write-Log "Username is required!" "ERROR"; return }
         if ($Username -notmatch '^[a-zA-Z0-9]+$') { Write-Log "Username cannot contain special characters." "ERROR"; return }
         if ($Username -eq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
+        if ([string]::IsNullOrWhiteSpace($PasswordText)) { Write-Log "Password is required for unattended setup." "ERROR"; return }
         $Password = Convert-PlainTextToSecureString -Text $PasswordText
         if ($EnableDynamicMem) {
             if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
@@ -3511,6 +3580,7 @@ $btnCreateVM.Add_Click({
         Write-Log "========================================" "INFO"
 
         # ---- Disable AutoPlay ----
+        $autoPlayOriginalState = Get-AutoPlayState
         $autoPlayChanged = Set-AutoPlay -Disable $true
 
         # ---- Create VM directory ----
@@ -3647,7 +3717,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 'echo icacls "%%SHAREFOLDER%%" /grant Everyone:(OI)(CI)F /T >> C:\Windows\Temp\CreateShare.cmd'
                 'echo powershell -Command "Set-NetFirewallRule -DisplayGroup ''File and Printer Sharing'' -Enabled True" >> C:\Windows\Temp\CreateShare.cmd'
                 'echo powershell -Command "if (Get-SmbShare -Name ''share'' -ErrorAction SilentlyContinue) { Remove-SmbShare -Name ''share'' -Force }" >> C:\Windows\Temp\CreateShare.cmd'
-                'echo powershell -Command "New-SmbShare -Name ''share'' -Path \"${env:USERPROFILE}\Desktop\share\" -FullAccess ''Everyone''" >> C:\Windows\Temp\CreateShare.cmd'
+                'echo powershell -Command "New-SmbShare -Name ''share'' -Path ''%%USERPROFILE%%\Desktop\share'' -FullAccess ''Everyone''" >> C:\Windows\Temp\CreateShare.cmd'
                 'echo exit >> C:\Windows\Temp\CreateShare.cmd'
                 ''
             )
@@ -3692,7 +3762,8 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Update-CreateProgress -Percent 22 -Status "Generating unattended setup..."
             Write-Log "Generating Autounattend.xml..."
             $UnattendXMLPath = Join-Path $VMLoc "Autounattend.xml"
-            New-UnattendXml -VMName $VMName -Username $Username -Password $Password -EnableAutoLogon $EnableAutoLogon -IsWindows11 $IsWin11 |
+            $guestArchForUnattend = if ($UseGoldenImage) { $script:HostArch } else { $script:DetectedGuestArch }
+            New-UnattendXml -VMName $VMName -Username $Username -Password $Password -EnableAutoLogon $EnableAutoLogon -IsWindows11 $IsWin11 -GuestArch $guestArchForUnattend |
                 Out-File -FilePath $UnattendXMLPath -Encoding UTF8
 
             # Minimize plaintext password lifetime in memory
@@ -4070,9 +4141,18 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Remove-PartialVmArtifacts -VMName $VMName -VMLoc $VMLoc -VHDPath $VHDPath -RemoveVmFolder $vmFolderCreatedByScript
         }
     } finally {
+        foreach ($artifact in @($UnattendXMLPath, $cmdFile, $tempExe)) {
+            if (-not [string]::IsNullOrWhiteSpace($artifact) -and (Test-Path $artifact)) {
+                try {
+                    Remove-Item -Path $artifact -Force -ErrorAction Stop
+                } catch {
+                    Write-Log "Could not remove setup artifact '$artifact': $($_.Exception.Message)" "WARN"
+                }
+            }
+        }
         if ($autoPlayChanged) {
             try {
-                Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers" -Name "DisableAutoplay" -Value 0
+                Restore-AutoPlayState -State $autoPlayOriginalState
             } catch {
                 Write-Log "Could not restore AutoPlay state: $($_.Exception.Message)" "WARN"
             }
@@ -4092,6 +4172,7 @@ $btnUpdateGPU.Add_Click({
     $script:IsUpdatingGPU = $true
 
     $autoPlayChanged = $false
+    $autoPlayOriginalState = $null
 
     try {
         # Gather selections
@@ -4143,6 +4224,7 @@ $btnUpdateGPU.Add_Click({
         Write-Log "========================================" "INFO"
 
         # Disable AutoPlay
+        $autoPlayOriginalState = Get-AutoPlayState
         $autoPlayChanged = Set-AutoPlay -Disable $true
 
         foreach ($VMName in $selectedVMs) {
@@ -4152,6 +4234,7 @@ $btnUpdateGPU.Add_Click({
             $skipDriverInjection = $false
             $gpuAdapterConfigured = $false
             $startVmPending = $false
+            $vmWasRunning = $false
 
             try {
                 $vm = Get-VM -Name $VMName -ErrorAction Stop
@@ -4159,6 +4242,7 @@ $btnUpdateGPU.Add_Click({
 
                 # Shutdown VM if running
                 if ($vm.State -eq 'Running') {
+                    $vmWasRunning = $true
                     Write-Log "[$VMName] Shutting down..."
                     if (-not (Stop-VMWithTimeout -VMName $VMName -TimeoutSec 60)) {
                         Write-Log "[$VMName] VM did not stop cleanly. Skipping to avoid corruption." "ERROR"
@@ -4213,6 +4297,10 @@ $btnUpdateGPU.Add_Click({
                 }
 
                 if ($skipDriverInjection) {
+                    if ($startAfterUpdate) {
+                        $startVmPending = $true
+                        Write-Log "[$VMName] Remove-only mode: VM start is scheduled by option." "INFO"
+                    }
                     Write-Log "[$VMName] Driver injection skipped (remove-only mode)." "INFO"
                     continue
                 }
@@ -4385,7 +4473,7 @@ $btnUpdateGPU.Add_Click({
     } finally {
         if ($autoPlayChanged) {
             try {
-                Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers" -Name "DisableAutoplay" -Value 0
+                Restore-AutoPlayState -State $autoPlayOriginalState
             } catch {
                 Write-Log "Could not restore AutoPlay state after GPU update: $($_.Exception.Message)" "WARN"
             }

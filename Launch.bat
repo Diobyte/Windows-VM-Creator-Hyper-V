@@ -50,7 +50,8 @@ if %errorLevel% neq 0 (
     echo.
     echo  Requesting administrator privileges...
     echo.
-    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs -ArgumentList @('--elevated')"
+    set "LAUNCHER_PATH=%~f0"
+    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$launcher = $env:LAUNCHER_PATH; Start-Process -FilePath $launcher -Verb RunAs -ArgumentList @('--elevated')"
     call :log "Elevation request dispatched"
     exit /b
 )

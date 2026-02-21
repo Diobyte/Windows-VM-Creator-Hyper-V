@@ -1387,6 +1387,8 @@ $tabControl.Padding    = New-Object System.Drawing.Point(14, 4)
 $tabControl.BackColor  = $theme.Card
 $tabControl.Add_DrawItem({
     param($sender, $e)
+    if (-not $e -or $e.Index -lt 0 -or $e.Index -ge $sender.TabPages.Count) { return }
+
     $isSelected = ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -eq [System.Windows.Forms.DrawItemState]::Selected
     $tabPage = $sender.TabPages[$e.Index]
     $rect = $e.Bounds
@@ -1395,17 +1397,19 @@ $tabControl.Add_DrawItem({
     $fg = if ($isSelected) { [System.Drawing.Color]::White } else { $theme.Text }
 
     $brush = New-Object System.Drawing.SolidBrush($bg)
-    $textBrush = New-Object System.Drawing.SolidBrush($fg)
-    $sf = New-Object System.Drawing.StringFormat
-    $sf.Alignment = [System.Drawing.StringAlignment]::Center
-    $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
 
     $e.Graphics.FillRectangle($brush, $rect)
-    $e.Graphics.DrawString($tabPage.Text.Trim(), $sender.Font, $textBrush, $rect, $sf)
+    $tabText = if ([string]::IsNullOrWhiteSpace($tabPage.Text)) { " " } else { $tabPage.Text.Trim() }
+    [System.Windows.Forms.TextRenderer]::DrawText(
+        $e.Graphics,
+        $tabText,
+        $sender.Font,
+        $rect,
+        $fg,
+        [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
+    )
 
     $brush.Dispose()
-    $textBrush.Dispose()
-    $sf.Dispose()
 })
 $form.Controls.Add($tabControl)
 

@@ -5,6 +5,11 @@ setlocal
 
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_PATH=%SCRIPT_DIR%HyperV-Toolkit.ps1"
+set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+if not exist "%POWERSHELL_EXE%" (
+    set "POWERSHELL_EXE=PowerShell.exe"
+)
 
 if not exist "%SCRIPT_PATH%" (
     echo.
@@ -14,8 +19,8 @@ if not exist "%SCRIPT_PATH%" (
     exit /b 1
 )
 
-:: Check for admin privileges (net session is more reliable than fltmc)
-net session >nul 2>&1
+:: Check for admin privileges using WindowsPrincipal (works even if Server service is disabled)
+"%POWERSHELL_EXE%" -NoProfile -Command "$p=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent(); if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){exit 0}else{exit 1}" >nul 2>&1
 if %errorLevel% neq 0 (
     if /i "%~1"=="--elevated" (
         echo.
@@ -27,7 +32,7 @@ if %errorLevel% neq 0 (
     echo.
     echo  Requesting administrator privileges...
     echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs -ArgumentList '--elevated'"
+    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy RemoteSigned -Command "Start-Process -FilePath '%~f0' -Verb RunAs -ArgumentList @('--elevated')"
     exit /b
 )
 
@@ -48,13 +53,15 @@ echo  Script: %SCRIPT_PATH%
 echo  Launching toolkit...
 echo.
 
-PowerShell.exe -NoProfile -ExecutionPolicy Bypass -Sta -File "%SCRIPT_PATH%"
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy RemoteSigned -Sta -File "%SCRIPT_PATH%"
 
-if %errorLevel% neq 0 (
+set "LAUNCH_EXIT_CODE=%errorLevel%"
+
+if %LAUNCH_EXIT_CODE% neq 0 (
     echo.
     echo  Launcher detected a startup error. Press any key to exit...
     pause >nul
 )
 
 endlocal
-exit /b %errorLevel%
+exit /b %LAUNCH_EXIT_CODE%

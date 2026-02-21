@@ -24,9 +24,9 @@ Write-Host "  [1/7] Configuring execution policy..." -ForegroundColor DarkGray
 $currentPolicy = Get-ExecutionPolicy -Scope Process
 if (-not $currentPolicy -or $currentPolicy -in @('Undefined', 'Restricted')) {
     try {
-        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
     } catch {
-        Write-Output "Could not set process execution policy to Bypass. Continuing with current policy: $currentPolicy"
+        Write-Output "Could not set process execution policy to RemoteSigned. Continuing with current policy: $currentPolicy"
     }
 }
 
@@ -64,7 +64,7 @@ if (-not $isAdmin) {
         try {
             Start-Process -FilePath "PowerShell.exe" -Verb RunAs -ArgumentList @(
                 '-NoProfile',
-                '-ExecutionPolicy', 'Bypass',
+                '-ExecutionPolicy', 'RemoteSigned',
                 '-Sta',
                 '-File', $scriptPath
             ) | Out-Null
@@ -1207,7 +1207,7 @@ $bypassBlock
         <SynchronousCommand wcm:action="add">
           <Order>2</Order>
           <!-- Username is validated to ^[a-zA-Z0-9]+$ so CMD-safe without extra escaping -->
-          <CommandLine>cmd /c wmic useraccount where name="$Username" set PasswordExpires=False</CommandLine>
+                      <CommandLine>powershell -NoProfile -Command "try { if (Get-Command Set-LocalUser -ErrorAction SilentlyContinue) { Set-LocalUser -Name '$Username' -PasswordNeverExpires $true } else { &amp; net.exe user '$Username' /expires:never | Out-Null } } catch { &amp; net.exe user '$Username' /expires:never | Out-Null }"</CommandLine>
           <Description>Disable Password Expiration</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
@@ -2871,7 +2871,8 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $lines += @(
                 ':: --- Parsec ---'
                 'echo [%date% %time%] Downloading Parsec... >> %LOGFILE%'
-                'bitsadmin /transfer "DownloadParsec" https://builds.parsecgaming.com/package/parsec-windows.exe %WORKDIR%\parsec.exe >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://builds.parsecgaming.com/package/parsec-windows.exe'' -OutFile ''%WORKDIR%\parsec.exe''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\parsec.exe''; if ($sig.Status -ne ''Valid'') { throw ''Parsec signature validation failed'' }" >> %LOGFILE% 2>&1'
+                'if errorlevel 1 (echo [%date% %time%] Parsec download/signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'echo [%date% %time%] Installing Parsec... >> %LOGFILE%'
                 'start /wait %WORKDIR%\parsec.exe /silent /percomputer /norun /vdd'
                 ''
@@ -2881,9 +2882,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $lines += @(
                 ':: --- VB Cable ---'
                 'echo [%date% %time%] Downloading VB Cable... >> %LOGFILE%'
-                'bitsadmin /transfer "DownloadVBCable" https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip %WORKDIR%\vb.zip >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'' -OutFile ''%WORKDIR%\vb.zip''" >> %LOGFILE% 2>&1'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable download failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'if not exist "%WORKDIR%\VB" mkdir "%WORKDIR%\VB"'
                 'tar -xf %WORKDIR%\vb.zip -C %WORKDIR%\VB >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\VB\VBCABLE_Setup_x64.exe''; if ($sig.Status -ne ''Valid'') { throw ''VB Cable signature validation failed'' }" >> %LOGFILE% 2>&1'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'start /wait %WORKDIR%\VB\VBCABLE_Setup_x64 -h -i -H -n'
                 ''
             )
@@ -2892,9 +2896,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $lines += @(
                 ':: --- Virtual Display Driver ---'
                 'echo [%date% %time%] Downloading USBMMIDD... >> %LOGFILE%'
-                'bitsadmin /transfer "DownloadUSBMMIDD" https://www.amyuni.com/downloads/usbmmidd_v2.zip %WORKDIR%\usbmmidd_v2.zip >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://www.amyuni.com/downloads/usbmmidd_v2.zip'' -OutFile ''%WORKDIR%\usbmmidd_v2.zip''" >> %LOGFILE% 2>&1'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD download failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 'if not exist "%WORKDIR%\usbmmidd_v2" mkdir "%WORKDIR%\usbmmidd_v2"'
                 'tar -xf %WORKDIR%\usbmmidd_v2.zip -C %WORKDIR% >> %LOGFILE% 2>&1'
+                'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\usbmmidd_v2\deviceinstaller64.exe''; if ($sig.Status -ne ''Valid'') { throw ''USBMMIDD signature validation failed'' }" >> %LOGFILE% 2>&1'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD signature validation failed >> %LOGFILE% & goto :SetupCompleteEnd)'
                 '@echo off'
                 'setlocal DisableDelayedExpansion'
                 'echo @cd /d "%%~dp0" > "%WORKDIR%\usbmmidd_v2\usbmmidd2.bat"'
@@ -2941,7 +2948,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         if ($ctrlCreate["PauseUpdate"].Checked) {
             $lines += @(
                 ':: --- Pause Windows Updates 1 year ---'
-                'powershell -ExecutionPolicy Bypass -NoProfile -Command "$now = (Get-Date).ToString(''yyyy-MM-ddTHH:mm:ssZ''); $future = (Get-Date).AddDays(365).ToString(''yyyy-MM-ddTHH:mm:ssZ''); $wuPath = ''HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings''; if (-not (Test-Path $wuPath)) { New-Item -Path $wuPath -Force | Out-Null }; Set-ItemProperty -Path $wuPath -Name ''PauseFeatureUpdatesStartTime'' -Value $now; Set-ItemProperty -Path $wuPath -Name ''PauseFeatureUpdatesEndTime'' -Value $future; Set-ItemProperty -Path $wuPath -Name ''PauseFeatureUpdates'' -Value 1 -Type DWord; Set-ItemProperty -Path $wuPath -Name ''PauseQualityUpdatesStartTime'' -Value $now; Set-ItemProperty -Path $wuPath -Name ''PauseQualityUpdatesEndTime'' -Value $future; Set-ItemProperty -Path $wuPath -Name ''PauseQualityUpdates'' -Value 1 -Type DWord"'
+                'powershell -NoProfile -Command "$now = (Get-Date).ToString(''yyyy-MM-ddTHH:mm:ssZ''); $future = (Get-Date).AddDays(365).ToString(''yyyy-MM-ddTHH:mm:ssZ''); $wuPath = ''HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings''; if (-not (Test-Path $wuPath)) { New-Item -Path $wuPath -Force | Out-Null }; Set-ItemProperty -Path $wuPath -Name ''PauseFeatureUpdatesStartTime'' -Value $now; Set-ItemProperty -Path $wuPath -Name ''PauseFeatureUpdatesEndTime'' -Value $future; Set-ItemProperty -Path $wuPath -Name ''PauseFeatureUpdates'' -Value 1 -Type DWord; Set-ItemProperty -Path $wuPath -Name ''PauseQualityUpdatesStartTime'' -Value $now; Set-ItemProperty -Path $wuPath -Name ''PauseQualityUpdatesEndTime'' -Value $future; Set-ItemProperty -Path $wuPath -Name ''PauseQualityUpdates'' -Value 1 -Type DWord"'
                 ''
             )
         }
@@ -2950,7 +2957,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- Full Windows Updates at first logon ---'
                 'reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v RunUpdates /d "cmd /c C:\Windows\Temp\RunUpdates.cmd" /f'
                 'echo @echo off > C:\Windows\Temp\RunUpdates.cmd'
-                'echo powershell -ExecutionPolicy Bypass -NoProfile -Command "try { Install-PackageProvider -Name NuGet -Force; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module PSWindowsUpdate -Force -Scope AllUsers; Import-Module PSWindowsUpdate; Add-WUServiceManager -MicrosoftUpdate -Confirm:$false -ErrorAction SilentlyContinue; Get-WindowsUpdate -MicrosoftUpdate -Install -AcceptAll -IgnoreReboot | Out-File -FilePath C:\\Windows\\Temp\\WUOutput.log -Encoding UTF8; } catch { Write-Output $_.Exception.Message }" >> C:\Windows\Temp\RunUpdates.cmd'
+                'echo powershell -NoProfile -Command "try { Install-PackageProvider -Name NuGet -Force; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module PSWindowsUpdate -Force -Scope AllUsers; Import-Module PSWindowsUpdate; Add-WUServiceManager -MicrosoftUpdate -Confirm:$false -ErrorAction SilentlyContinue; Get-WindowsUpdate -MicrosoftUpdate -Install -AcceptAll -IgnoreReboot | Out-File -FilePath C:\\Windows\\Temp\\WUOutput.log -Encoding UTF8; } catch { Write-Output $_.Exception.Message }" >> C:\Windows\Temp\RunUpdates.cmd'
                 'echo shutdown /r /t 30 /c "Windows Updates complete. Rebooting in 30 seconds." >> C:\Windows\Temp\RunUpdates.cmd'
                 'echo exit >> C:\Windows\Temp\RunUpdates.cmd'
                 ''
@@ -2965,6 +2972,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             'del /f /q C:\Windows\Panther\Unattend\Unattend.xml 2>nul'
             'del /f /q C:\Windows\System32\Sysprep\Unattend.xml 2>nul'
             'echo [%date% %time%] Unattend cleanup complete >> %LOGFILE%'
+            ':SetupCompleteEnd'
         )
         $lines += @(
             'echo [%date% %time%] SetupComplete.cmd finished >> %LOGFILE%'
@@ -3427,6 +3435,7 @@ $btnUpdateGPU.Add_Click({
             $mountLetter = $null
             $mountedByScript = $false
             $skipDriverInjection = $false
+            $gpuAdapterConfigured = $false
 
             try {
                 $vm = Get-VM -Name $VMName -ErrorAction Stop
@@ -3465,8 +3474,10 @@ $btnUpdateGPU.Add_Click({
 
                         Set-GpuPartitionForVM -VMName $VMName -AllocationPercent $gpuAllocPercent
                         Write-Log "[$VMName] GPU-P adapter configured." "OK"
+                        $gpuAdapterConfigured = $true
                     } catch {
                         Write-Log "[$VMName] GPU-P adapter error: $($_.Exception.Message)" "ERROR"
+                        continue
                     }
                 } elseif ($providerObj -and $null -eq $providerObj.Provider) {
                     Write-Log "[$VMName] GPU-P adapter removed only (NONE selected)." "OK"
@@ -3478,13 +3489,20 @@ $btnUpdateGPU.Add_Click({
                         Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
                         Set-GpuPartitionForVM -VMName $VMName -AllocationPercent $gpuAllocPercent
                         Write-Log "[$VMName] GPU-P adapter configured." "OK"
+                        $gpuAdapterConfigured = $true
                     } catch {
                         Write-Log "[$VMName] GPU-P adapter error: $($_.Exception.Message)" "ERROR"
+                        continue
                     }
                 }
 
                 if ($skipDriverInjection) {
                     Write-Log "[$VMName] Driver injection skipped (remove-only mode)." "INFO"
+                    continue
+                }
+
+                if (-not $gpuAdapterConfigured) {
+                    Write-Log "[$VMName] GPU-P adapter was not configured successfully. Skipping driver injection." "ERROR"
                     continue
                 }
 
@@ -3548,6 +3566,7 @@ $btnUpdateGPU.Add_Click({
 
                 if (-not $copyResult) {
                     Write-Log "[$VMName] GPU driver copy failed." "ERROR"
+                    continue
                 }
 
                 # Copy vendor-specific System32 DLLs

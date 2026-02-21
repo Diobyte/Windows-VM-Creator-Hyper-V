@@ -42,6 +42,7 @@ Hyper-V setup can be repetitive, especially when combining VM creation with GPU 
 - Hyper-V feature enabled
 - Administrator privileges
 - PowerShell (64-bit)
+- PowerShell execution policy that allows local scripts (the launcher uses `RemoteSigned`)
 
 ## Project layout
 
@@ -85,6 +86,8 @@ flowchart LR
 - Use 64-bit PowerShell only.
 - Ensure ISO and destination paths are accessible.
 - Keep enough free disk space for VHD and drivers.
+- If launch is blocked by execution policy after downloading from the internet, run `Unblock-File .\HyperV-Toolkit.ps1` in PowerShell and retry.
+- Optional post-install downloads now require valid Authenticode signatures; if a package fails validation, that install step is skipped and logged.
 
 ## Version
 

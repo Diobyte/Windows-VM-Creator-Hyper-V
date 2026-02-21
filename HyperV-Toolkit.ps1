@@ -340,6 +340,8 @@ $script:IsCreating          = $false  # Re-entrancy guard for VM creation
 $script:IsUpdatingGPU       = $false  # Re-entrancy guard for GPU update
 $script:SuppressMemEvents   = $false  # Suppress cascading Dynamic Memory ValueChanged events
 $script:GpuSelectedVMs      = @{}     # Persist selected VMs across filter/refresh
+$script:SuspendGpuSelectionEvents = $false # Batch-select guard to avoid event storms
+$script:DoEventsWarningLogged = $false # One-time guard for DoEvents warning logging
 $script:LastLogRefresh      = [DateTime]::MinValue  # Rate-limit LogBox.Refresh()
 $script:LogRefreshIntervalMs = 100                  # Minimum ms between log repaints
 $script:LogMaxLength        = 200000                # Trim log when exceeding ~200KB
@@ -425,6 +427,17 @@ function Write-Log {
     if (($now - $script:LastLogRefresh).TotalMilliseconds -ge $script:LogRefreshIntervalMs -or $Level -eq 'ERROR') {
         $script:LogBox.Refresh()
         $script:LastLogRefresh = $now
+    }
+}
+
+function Write-UiWarning {
+    param([string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return }
+    if ($script:LogBox) {
+        Write-Log $Message "WARN"
+    } else {
+        Write-Output $Message
     }
 }
 
@@ -2964,9 +2977,10 @@ function Update-VMList {
         if ($ctrlGPU.ContainsKey("VmSearch") -and $ctrlGPU["VmSearch"]) {
             $filterText = [string]$ctrlGPU["VmSearch"].Text
         }
-        $allVms = @(Get-VM -ErrorAction SilentlyContinue)
+        $allVms = @(Get-VM -ErrorAction SilentlyContinue | Sort-Object Name)
         $vms = if (-not [string]::IsNullOrWhiteSpace($filterText)) {
-            $allVms | Where-Object { $_.Name -match [regex]::Escape($filterText) }
+            $escapedFilter = [System.Management.Automation.WildcardPattern]::Escape($filterText)
+            $allVms | Where-Object { $_.Name -like "*$escapedFilter*" }
         } else {
             $allVms
         }
@@ -2987,6 +3001,7 @@ function Update-VMList {
                 $cb.Checked = [bool]$script:GpuSelectedVMs[$vm.Name]
             }
             $cb.Add_CheckedChanged({
+                if ($script:SuspendGpuSelectionEvents) { return }
                 if ($this -and $this.Text) {
                     $script:GpuSelectedVMs[$this.Text] = [bool]$this.Checked
                 }
@@ -3030,7 +3045,18 @@ $btnSelectAll.Size     = New-Object System.Drawing.Size(60, 24)
 $btnSelectAll.Location = New-Object System.Drawing.Point(8, 368)
 $btnSelectAll.FlatStyle = 'Flat'
 $btnSelectAll.ForeColor = [System.Drawing.Color]::White
-$btnSelectAll.Add_Click({ foreach ($cb in $ctrlGPU["VMCheckboxes"]) { $cb.Checked = $true } })
+$btnSelectAll.Add_Click({
+    $script:SuspendGpuSelectionEvents = $true
+    try {
+        foreach ($cb in $ctrlGPU["VMCheckboxes"]) {
+            $cb.Checked = $true
+            if ($cb -and $cb.Text) { $script:GpuSelectedVMs[$cb.Text] = $true }
+        }
+    } finally {
+        $script:SuspendGpuSelectionEvents = $false
+    }
+    Update-GpuActionState
+})
 $grpVMs.Controls.Add($btnSelectAll)
 
 $btnSelectNone = New-Object System.Windows.Forms.Button
@@ -3039,7 +3065,18 @@ $btnSelectNone.Size     = New-Object System.Drawing.Size(60, 24)
 $btnSelectNone.Location = New-Object System.Drawing.Point(74, 368)
 $btnSelectNone.FlatStyle = 'Flat'
 $btnSelectNone.ForeColor = [System.Drawing.Color]::White
-$btnSelectNone.Add_Click({ foreach ($cb in $ctrlGPU["VMCheckboxes"]) { $cb.Checked = $false } })
+$btnSelectNone.Add_Click({
+    $script:SuspendGpuSelectionEvents = $true
+    try {
+        foreach ($cb in $ctrlGPU["VMCheckboxes"]) {
+            $cb.Checked = $false
+            if ($cb -and $cb.Text) { $script:GpuSelectedVMs[$cb.Text] = $false }
+        }
+    } finally {
+        $script:SuspendGpuSelectionEvents = $false
+    }
+    Update-GpuActionState
+})
 $grpVMs.Controls.Add($btnSelectNone)
 
 $btnRefreshVMs = New-Object System.Windows.Forms.Button
@@ -3310,7 +3347,7 @@ function Update-MainLayout {
 
         Update-TabLayouts -RootForm $RootForm
     } catch {
-        Write-Output "Layout adjustment warning: $($_.Exception.Message)"
+        Write-UiWarning "Layout adjustment warning: $($_.Exception.Message)"
     } finally {
         $RootForm.ResumeLayout($true)
     }
@@ -3581,18 +3618,34 @@ function Update-TabLayouts {
 
         $tabGPU.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($gpuBottomMost + 24))
     } catch {
-        Write-Output "Tab layout adjustment warning: $($_.Exception.Message)"
+        Write-UiWarning "Tab layout adjustment warning: $($_.Exception.Message)"
     } finally {
         $tabCreate.ResumeLayout($true)
         $tabGPU.ResumeLayout($true)
     }
 }
 
+$script:LayoutTimer = New-Object System.Windows.Forms.Timer
+$script:LayoutTimer.Interval = 100
+$script:LayoutTimer.Add_Tick({
+    $script:LayoutTimer.Stop()
+    try {
+        Update-MainLayout -RootForm $form
+    } catch {
+        Write-UiWarning "Deferred layout warning: $($_.Exception.Message)"
+    }
+})
+
 $form.Add_Shown({
-    try { Update-MainLayout -RootForm $form } catch { Write-Output "Shown layout warning: $($_.Exception.Message)" }
+    try {
+        Update-MainLayout -RootForm $form
+    } catch {
+        Write-UiWarning "Shown layout warning: $($_.Exception.Message)"
+    }
 })
 $form.Add_Resize({
-    try { Update-MainLayout -RootForm $form } catch { Write-Output "Resize layout warning: $($_.Exception.Message)" }
+    $script:LayoutTimer.Stop()
+    $script:LayoutTimer.Start()
 })
 
 # ---- Modern UI styling helpers ----
@@ -3764,8 +3817,19 @@ $toolTip.SetToolTip($btnExit, "Close the toolkit and run image mount cleanup.")
 # Refresh VM list once tooltips are available so initial checkbox rows receive them.
 Update-VMList
 
+function Get-ActiveFocusedControl {
+    param([System.Windows.Forms.Control]$RootControl)
+
+    $current = $RootControl
+    while ($current -and $current.ContainsFocus -and $current -is [System.Windows.Forms.ContainerControl] -and $current.ActiveControl) {
+        $current = $current.ActiveControl
+    }
+    return $current
+}
+
 $form.Add_KeyDown({
     param($eventSourceControl, $e)
+    [void]$eventSourceControl
 
     # Escape: confirm before closing
     if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
@@ -3784,7 +3848,7 @@ $form.Add_KeyDown({
     if (-not $e.Control) { return }
 
     # Don't intercept shortcuts when a TextBox has focus (allow normal Ctrl+key editing)
-    $focused = $form.ActiveControl
+    $focused = Get-ActiveFocusedControl -RootControl $form
     if ($focused -is [System.Windows.Forms.TextBox] -or $focused -is [System.Windows.Forms.TextBoxBase]) { return }
 
     if ($e.KeyCode -eq [System.Windows.Forms.Keys]::L) {
@@ -5771,6 +5835,7 @@ $form.Add_FormClosing({
     # Dispose timers
     if ($script:ValidationTimer)  { $script:ValidationTimer.Stop();  $script:ValidationTimer.Dispose() }
     if ($script:VmFilterTimer)    { $script:VmFilterTimer.Stop();    $script:VmFilterTimer.Dispose() }
+    if ($script:LayoutTimer)      { $script:LayoutTimer.Stop();      $script:LayoutTimer.Dispose() }
     # Dispose cached brushes
     if ($script:TabBrushSelected) { $script:TabBrushSelected.Dispose() }
     if ($script:TabBrushNormal)   { $script:TabBrushNormal.Dispose() }

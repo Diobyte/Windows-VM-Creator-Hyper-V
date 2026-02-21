@@ -268,10 +268,35 @@ $script:LogBox              = $null   # Set when GUI is built
 $script:IsCreating          = $false  # Re-entrancy guard for VM creation
 $script:IsUpdatingGPU       = $false  # Re-entrancy guard for GPU update
 $script:GpuSelectedVMs      = @{}     # Persist selected VMs across filter/refresh
+$script:LastLogRefresh      = [DateTime]::MinValue  # Rate-limit LogBox.Refresh()
+$script:LogRefreshIntervalMs = 100                  # Minimum ms between log repaints
+$script:LogMaxLength        = 200000                # Trim log when exceeding ~200KB
+$script:PathCache           = @{}                   # Test-Path cache: path → [result, DateTime]
+$script:PathCacheTtlMs      = 2000                  # Cache TTL for Test-PathCached
 
 #endregion
 
 #region ==================== UTILITY FUNCTIONS ====================
+
+function Test-PathCached {
+    <#
+    .SYNOPSIS
+        Cached wrapper around Test-Path to avoid UI freezes on slow paths.
+        Results are cached for $script:PathCacheTtlMs milliseconds.
+    #>
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $now = [DateTime]::UtcNow
+    if ($script:PathCache.ContainsKey($Path)) {
+        $entry = $script:PathCache[$Path]
+        if (($now - $entry.Time).TotalMilliseconds -lt $script:PathCacheTtlMs) {
+            return $entry.Result
+        }
+    }
+    $result = Test-Path $Path
+    $script:PathCache[$Path] = @{ Result = $result; Time = $now }
+    return $result
+}
 
 function Write-Log {
     param(
@@ -284,6 +309,17 @@ function Write-Log {
         Write-Output "$timestamp [$Level] $Message"
         return
     }
+
+    # Trim oldest lines when text exceeds cap to prevent unbounded memory growth
+    if ($script:LogBox.TextLength -gt $script:LogMaxLength) {
+        $trimTo = [Math]::Max(0, $script:LogBox.TextLength - [int]($script:LogMaxLength * 0.7))
+        $newlineIdx = $script:LogBox.Text.IndexOf("`n", $trimTo)
+        if ($newlineIdx -gt 0) { $trimTo = $newlineIdx + 1 }
+        $script:LogBox.Select(0, $trimTo)
+        $script:LogBox.SelectedText = ""
+        $script:LogBox.SelectionStart = $script:LogBox.TextLength
+    }
+
     $color = switch ($Level) {
         "ERROR" { [System.Drawing.Color]::Tomato }
         "WARN"  { [System.Drawing.Color]::Gold }
@@ -295,8 +331,12 @@ function Write-Log {
     $script:LogBox.SelectionColor  = $color
     $script:LogBox.AppendText("$timestamp [$Level] $Message`r`n")
     $script:LogBox.ScrollToCaret()
-    # Use targeted Refresh instead of DoEvents to avoid re-entrancy from queued event handlers
-    $script:LogBox.Refresh()
+    # Rate-limited Refresh to avoid hammering UI during rapid logging (e.g. DISM, driver copy)
+    $now = [DateTime]::UtcNow
+    if (($now - $script:LastLogRefresh).TotalMilliseconds -ge $script:LogRefreshIntervalMs -or $Level -eq 'ERROR') {
+        $script:LogBox.Refresh()
+        $script:LastLogRefresh = $now
+    }
 }
 
 function Get-ErrorGuidance {
@@ -441,7 +481,7 @@ function Get-AutoPlayState {
 }
 
 function Restore-AutoPlayState {
-    param([AllowNull()][int]$State)
+    param([AllowNull()][System.Nullable[int]]$State)
 
     if ($null -eq $State) { return }
 
@@ -452,6 +492,19 @@ function Restore-AutoPlayState {
     } catch {
         Write-Output "Could not restore AutoPlay registry value: $($_.Exception.Message)"
     }
+}
+
+function Disable-AutoPlayGuarded {
+    <#
+    .SYNOPSIS
+        Saves the current AutoPlay state, disables AutoPlay, and returns the
+        original state as a restore token.  Returns $null if no change was made.
+        Pass the result to Restore-AutoPlayState when finished.
+    #>
+    $original = Get-AutoPlayState
+    $changed  = Set-AutoPlay -Disable $true
+    if ($changed) { return $original }
+    return $null
 }
 
 function Dismount-ImageRetry {
@@ -707,6 +760,7 @@ function Get-DataPartitions {
 }
 
 function Set-ToolkitNatSwitch {
+    [CmdletBinding()]
     param(
         [string]$SwitchName = "HyperV-Toolkit-NAT",
         [string]$GatewayIp = "192.168.250.1",
@@ -734,11 +788,18 @@ function Set-ToolkitNatSwitch {
                 Where-Object { $_.IPAddress -eq $GatewayIp }
 
             if (-not $ipExists) {
-                try {
-                    New-NetIPAddress -InterfaceAlias $adapterAlias -IPAddress $GatewayIp -PrefixLength $PrefixLength -AddressFamily IPv4 -ErrorAction Stop | Out-Null
-                    Write-Log "Assigned $GatewayIp/$PrefixLength to $adapterAlias" "OK"
-                } catch {
-                    Write-Log "IP assignment skipped or failed for ${adapterAlias}: $($_.Exception.Message)" "WARN"
+                # Check for conflicting gateway IP on a different interface
+                $conflictingIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                    Where-Object { $_.IPAddress -eq $GatewayIp -and $_.InterfaceAlias -ne $adapterAlias }
+                if ($conflictingIp) {
+                    Write-Log "Gateway IP $GatewayIp is already assigned to interface '$($conflictingIp.InterfaceAlias)'. Skipping assignment." "WARN"
+                } else {
+                    try {
+                        New-NetIPAddress -InterfaceAlias $adapterAlias -IPAddress $GatewayIp -PrefixLength $PrefixLength -AddressFamily IPv4 -ErrorAction Stop | Out-Null
+                        Write-Log "Assigned $GatewayIp/$PrefixLength to $adapterAlias" "OK"
+                    } catch {
+                        Write-Log "IP assignment skipped or failed for ${adapterAlias}: $($_.Exception.Message)" "WARN"
+                    }
                 }
             }
         }
@@ -780,12 +841,7 @@ function Convert-PlainTextToSecureString {
         return $null
     }
 
-    $secure = New-Object System.Security.SecureString
-    foreach ($char in $Text.ToCharArray()) {
-        $secure.AppendChar($char)
-    }
-    $secure.MakeReadOnly()
-    return $secure
+    return (ConvertTo-SecureString -String $Text -AsPlainText -Force)
 }
 
 function Update-CreateProgress {
@@ -1114,8 +1170,11 @@ function Get-DriverVersionBranch {
     if ([string]::IsNullOrWhiteSpace($VersionString)) { return -1 }
     try {
         $segments = $VersionString.Split('.')
-        if ($segments.Count -lt 1) { return -1 }
-        return [int]$segments[0]
+        # NVIDIA Windows driver versions use 4 segments: Major.Minor.Branch.Build
+        # e.g. 32.0.15.7275 — the 3rd segment (index 2) is the meaningful branch.
+        if ($segments.Count -ge 4) { return [int]$segments[2] }
+        if ($segments.Count -ge 1) { return [int]$segments[0] }
+        return -1
     } catch {
         return -1
     }
@@ -1129,7 +1188,7 @@ function Get-GpuPartitionValues {
     #>
     param(
         [string]$VMName,
-        [ValidateRange(1,100)]
+        [ValidateRange(10,100)]
         [int]$Percentage = 100
     )
 
@@ -1171,6 +1230,7 @@ function Copy-GpuServiceDriver {
         Copies the GPU kernel-mode service driver directory to the VM's
         HostDriverStore (Diobyte Version 1 method).
     #>
+    [CmdletBinding()]
     param(
         [string]$MountLetter,
         [string]$GPUName = "AUTO"
@@ -1211,9 +1271,10 @@ function Copy-GpuServiceDriver {
 
         $sysDriver = Get-CimInstance Win32_SystemDriver | Where-Object { $_.Name -eq $svcName }
         if ($sysDriver -and $sysDriver.PathName) {
-            $servicePath = $sysDriver.PathName
+            # Strip common Win32_SystemDriver PathName prefixes like \??\
+            $servicePath = $sysDriver.PathName -replace '^\\\?\?\\', ''
             # Robustly extract the driver folder: find the DriverStore\FileRepository segment
-            $segments = $servicePath.Split('\')
+            $segments = $servicePath.Split('\\')
             $dsIdx = -1
             for ($si = 0; $si -lt $segments.Count; $si++) {
                 if ($segments[$si] -eq 'FileRepository') { $dsIdx = $si; break }
@@ -1223,9 +1284,10 @@ function Copy-GpuServiceDriver {
                 $relPath = ($segments[1..($dsIdx + 1)]) -join '\'
                 $serviceDriverDest = Join-Path "$MountLetter\" ($relPath.Replace('DriverStore','HostDriverStore'))
             } else {
-                # Fallback to original 6-segment approach
-                $serviceDriverDir  = ($segments[0..5]) -join '\'
-                $serviceDriverDest = ("$MountLetter\" + ($segments[1..5] -join '\')).Replace('DriverStore','HostDriverStore')
+                # Fallback: use the parent folder of the driver binary
+                $serviceDriverDir  = Split-Path -Parent $servicePath
+                $relPath = $serviceDriverDir.Substring($serviceDriverDir.IndexOf('\') + 1)
+                $serviceDriverDest = ("$MountLetter\" + $relPath).Replace('DriverStore','HostDriverStore')
             }
 
             if (Test-Path $serviceDriverDir) {
@@ -1374,6 +1436,7 @@ function Invoke-DismApplyImage {
         Applies a WIM/ESD image using DISM with timeout protection.
         Falls back from /Compact to normal mode on failure.
     #>
+    [CmdletBinding()]
     param(
         [string]$ImageFile,
         [int]$Index,
@@ -1399,11 +1462,47 @@ function Invoke-DismApplyImage {
             return @{ Output = $output; ExitCode = $LASTEXITCODE }
         } -ArgumentList (,$dismArgs)
 
-        $completed = Wait-Job $dismJob -Timeout ($TimeoutMinutes * 60)
-        if (-not $completed) {
+        # Poll the job for incremental progress instead of blocking on Wait-Job
+        $timeoutSec = $TimeoutMinutes * 60
+        $elapsed = 0
+        $pollInterval = 3  # seconds
+        $lastPct = -1
+        $timedOut = $false
+
+        while ($dismJob.State -eq 'Running' -and $elapsed -lt $timeoutSec) {
+            Start-Sleep -Seconds $pollInterval
+            $elapsed += $pollInterval
+
+            # Attempt to read partial output (DISM progress lines)
+            try {
+                $partial = Receive-Job $dismJob -ErrorAction SilentlyContinue
+                if ($partial -and $partial.Output) {
+                    foreach ($line in $partial.Output) {
+                        $lineStr = "$line".Trim()
+                        if ($lineStr -match '(\d+)\.\d+%') {
+                            $pct = [int]$Matches[1]
+                            if ($pct -ne $lastPct -and ($pct % 10 -eq 0 -or $pct -ge 99)) {
+                                Write-Log "  DISM progress: ${pct}%"
+                                $lastPct = $pct
+                            }
+                        }
+                    }
+                }
+            } catch { }
+        }
+
+        if ($dismJob.State -eq 'Running') {
+            $timedOut = $true
             Write-Log "DISM timed out after $TimeoutMinutes minutes ($($attempt.Label))" "ERROR"
             Stop-Job $dismJob -ErrorAction SilentlyContinue
             Remove-Job $dismJob -Force -ErrorAction SilentlyContinue
+
+            # Clean up partially applied image to avoid corrupt state on retry
+            if (Test-Path $ApplyDir) {
+                Write-Log "Cleaning up partial DISM image at $ApplyDir before retry..." "WARN"
+                Get-ChildItem -Path $ApplyDir -Force -ErrorAction SilentlyContinue |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            }
             continue
         }
 
@@ -1628,8 +1727,8 @@ function Get-GpuPProviders {
             }
         }
 
-        # Skip AI accelerators
-        if ($friendlyName -match '(?i)\bAI\b') { continue }
+        # Skip dedicated AI/NPU accelerators (but not GPUs with 'AI' in branding)
+        if ($friendlyName -match '(?i)\b(NPU|Neural|VPU|Coral|Myriad)\b') { continue }
 
         $list += [PSCustomObject]@{
             Friendly = $friendlyName
@@ -1784,6 +1883,7 @@ function Copy-GpuDriverFolders {
         Smart GPU driver copy - only copies GPU-relevant DriverStore folders.
         Checks for sufficient disk space and auto-expands VHD if needed.
     #>
+    [CmdletBinding()]
     param(
         [string]$VMName,
         [string]$MountLetter,
@@ -1951,6 +2051,7 @@ function Test-HostHasNvidiaGpu {
 }
 
 function Set-GpuPartitionForVM {
+    [CmdletBinding()]
     param(
         [string]$VMName,
         [ValidateRange(10,100)]
@@ -2061,18 +2162,7 @@ $tabCreate.BackColor   = $theme.Card
 $tabCreate.ForeColor   = $theme.Text
 $tabCreate.AutoScroll  = $true
 
-# Use TableLayoutPanel for responsive layout
-$table = New-Object System.Windows.Forms.TableLayoutPanel
-$table.ColumnCount = 2
-$table.RowCount = 4
-[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 520)))
-[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 140)))
-[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 170)))
-[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 250)))
-[void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-$table.Dock = 'Fill'
-$tabCreate.Controls.Add($table)
+# GroupBoxes are added directly to $tabCreate; Update-TabLayouts handles all positioning.
 
 $tabControl.TabPages.Add($tabCreate)
 
@@ -2138,9 +2228,7 @@ $grpConfig.Text      = "VM Configuration - Core Settings"
 $grpConfig.ForeColor = $theme.Text
 $grpConfig.BackColor = $theme.Surface
 $grpConfig.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$grpConfig.Dock      = 'Fill'
-$table.Controls.Add($grpConfig, 0, 0)
-$table.SetRowSpan($grpConfig, 3)
+$tabCreate.Controls.Add($grpConfig)
 
 $rowY = 22
 $ctrlCreate["VMName"] = New-LabeledControl $grpConfig 12 $rowY "VM Name:" -ControlWidth 300
@@ -2247,8 +2335,7 @@ $grpBoot           = New-Object System.Windows.Forms.GroupBox
 $grpBoot.Text      = "Boot && Hardware - Security"
 $grpBoot.ForeColor = [System.Drawing.Color]::White
 $grpBoot.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$grpBoot.Dock      = 'Fill'
-$table.Controls.Add($grpBoot, 1, 0)
+$tabCreate.Controls.Add($grpBoot)
 
 $ctrlCreate["SecureBoot"] = New-Object System.Windows.Forms.CheckBox
 $ctrlCreate["SecureBoot"].Text     = "Secure Boot (auto: ON for Win11, OFF for Win10)"
@@ -2279,8 +2366,7 @@ $grpOpts           = New-Object System.Windows.Forms.GroupBox
 $grpOpts.Text      = "VM Options - Runtime"
 $grpOpts.ForeColor = [System.Drawing.Color]::White
 $grpOpts.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$grpOpts.Dock      = 'Fill'
-$table.Controls.Add($grpOpts, 1, 1)
+$tabCreate.Controls.Add($grpOpts)
 
 $chkNames = @(
     @{ Key = "DynamicMem";       Text = "Enable Dynamic Memory";       X = 14;  Y = 28; Default = $false },
@@ -2314,8 +2400,7 @@ $grpSoft           = New-Object System.Windows.Forms.GroupBox
 $grpSoft.Text      = "Post-Install Software && Advanced"
 $grpSoft.ForeColor = [System.Drawing.Color]::White
 $grpSoft.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
-$grpSoft.Dock      = 'Fill'
-$table.Controls.Add($grpSoft, 1, 2)
+$tabCreate.Controls.Add($grpSoft)
 
 $softwareChecks = @(
     @{ Key = "Parsec";       Text = "Parsec (Per Computer)";  X = 14;  Y = 28 },
@@ -2349,25 +2434,21 @@ $btnBrowseGolden.Location = New-Object System.Drawing.Point(438, 210)
 $btnBrowseGolden.FlatStyle = 'Flat'
 $grpSoft.Controls.Add($btnBrowseGolden)
 
-# Bottom panel for controls below GroupBoxes
-$bottomPanel = New-Object System.Windows.Forms.Panel
-$bottomPanel.Dock = 'Fill'
-$table.Controls.Add($bottomPanel, 0, 3)
-$table.SetColumnSpan($bottomPanel, 2)
+# Bottom controls — added directly to $tabCreate; Update-TabLayouts positions them.
 
 $ctrlCreate["ModeHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ModeHint"].Text = "Mode: ISO Deploy - Uses ISO, selected edition, and unattended setup."
 $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 14)
 $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 20)
 $ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
-$bottomPanel.Controls.Add($ctrlCreate["ModeHint"])
+$tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
 $ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
 $ctrlCreate["ValidationHint"].Text = "Checks: Name ? | Source ? | Network ? | User ?"
 $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 16)
 $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 0)
 $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
-$bottomPanel.Controls.Add($ctrlCreate["ValidationHint"])
+$tabCreate.Controls.Add($ctrlCreate["ValidationHint"])
 
 # Create VM Button
 $btnCreateVM           = New-Object System.Windows.Forms.Button
@@ -2378,7 +2459,7 @@ $btnCreateVM.FlatStyle = 'Flat'
 $btnCreateVM.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
 $btnCreateVM.ForeColor = [System.Drawing.Color]::White
 $btnCreateVM.Font      = $script:FontBoldButton
-$bottomPanel.Controls.Add($btnCreateVM)
+$tabCreate.Controls.Add($btnCreateVM)
 
 # Create VM status + progress
 $ctrlCreate["CreateStatus"] = New-Object System.Windows.Forms.Label
@@ -2386,7 +2467,7 @@ $ctrlCreate["CreateStatus"].Text = "Ready to create VM"
 $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 18)
 $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 38)
 $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Cyan
-$bottomPanel.Controls.Add($ctrlCreate["CreateStatus"])
+$tabCreate.Controls.Add($ctrlCreate["CreateStatus"])
 
 $ctrlCreate["CreateProgress"] = New-Object System.Windows.Forms.ProgressBar
 $ctrlCreate["CreateProgress"].Minimum = 0
@@ -2395,7 +2476,7 @@ $ctrlCreate["CreateProgress"].Value = 0
 $ctrlCreate["CreateProgress"].Style = 'Continuous'
 $ctrlCreate["CreateProgress"].Size = New-Object System.Drawing.Size(450, 14)
 $ctrlCreate["CreateProgress"].Location = New-Object System.Drawing.Point(8, 60)
-$bottomPanel.Controls.Add($ctrlCreate["CreateProgress"])
+$tabCreate.Controls.Add($ctrlCreate["CreateProgress"])
 
 # ============================================================
 #  TAB 2: GPU MANAGER
@@ -3486,16 +3567,16 @@ function Update-CreateValidationHint {
 
     $nameOk = (-not [string]::IsNullOrWhiteSpace($vmName)) -and ($vmName -match '^[a-zA-Z0-9_-]+$') -and ($vmName.Length -le 64)
     $sourceOk = if ($useGolden) {
-        -not [string]::IsNullOrWhiteSpace($goldenPath) -and (Test-Path $goldenPath)
+        -not [string]::IsNullOrWhiteSpace($goldenPath) -and (Test-PathCached $goldenPath)
     } else {
-        $isoPathOk = (-not [string]::IsNullOrWhiteSpace($isoPath)) -and (Test-Path $isoPath)
+        $isoPathOk = (-not [string]::IsNullOrWhiteSpace($isoPath)) -and (Test-PathCached $isoPath)
         $isoMountedMatches = $false
         if ($script:MountedISO -and $script:MountedISO.ImagePath) {
             $mountedIsoPath = [string]$script:MountedISO.ImagePath
             $isoMountedMatches = ($mountedIsoPath.Trim().ToLowerInvariant() -eq $isoPath.Trim().ToLowerInvariant())
         }
         $editionSelected = ($ctrlCreate.ContainsKey("Edition") -and $ctrlCreate["Edition"] -and $ctrlCreate["Edition"].SelectedItem)
-        $wimReady = (-not [string]::IsNullOrWhiteSpace($script:WimFile)) -and (Test-Path $script:WimFile) -and $editionSelected
+        $wimReady = (-not [string]::IsNullOrWhiteSpace($script:WimFile)) -and (Test-PathCached $script:WimFile) -and $editionSelected
         ($isoPathOk -and $isoMountedMatches -and $wimReady)
     }
     $networkOk = ($switchSelected -or $autoSwitch)
@@ -3720,8 +3801,7 @@ $btnCreateVM.Add_Click({
     $VHDPath = ""
     $preflightLines = @()
     $rollbackNeeded = $false
-    $autoPlayChanged = $false
-    $autoPlayOriginalState = $null
+    $autoPlayGuard = $null
     $vhdMountedForDeploy = $false
     $vmFolderCreatedByScript = $false
     $tempExe = $null
@@ -3873,9 +3953,10 @@ $btnCreateVM.Add_Click({
         if (-not $UseGoldenImage) {
             if ([string]::IsNullOrWhiteSpace($Username)) { Write-Log "Username is required!" "ERROR"; return }
             if ($Username -notmatch '^[a-zA-Z0-9]+$') { Write-Log "Username cannot contain special characters." "ERROR"; return }
-            if ($Username -eq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
+            if ($Username -ieq $VMName) { Write-Log "Username cannot be the same as VM Name (causes admin permission issues in the VM)." "ERROR"; return }
             if ([string]::IsNullOrWhiteSpace($PasswordText)) { Write-Log "Password is required for unattended setup." "ERROR"; return }
             $Password = Convert-PlainTextToSecureString -Text $PasswordText
+            $PasswordText = $null   # Minimize plaintext password lifetime in memory
         }
         if ($EnableDynamicMem) {
             if ($DynamicMemMinGB -gt $DynamicMemMaxGB) {
@@ -3979,8 +4060,7 @@ $btnCreateVM.Add_Click({
         Write-Log "========================================" "INFO"
 
         # ---- Disable AutoPlay ----
-        $autoPlayOriginalState = Get-AutoPlayState
-        $autoPlayChanged = Set-AutoPlay -Disable $true
+        $autoPlayGuard = Disable-AutoPlayGuarded
 
         # ---- Create VM directory ----
         Update-CreateProgress -Percent 10 -Status "Creating VM workspace..."
@@ -4191,7 +4271,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         # ---- Mount VHD and partition ----
             Update-CreateProgress -Percent 38 -Status "Partitioning virtual disk..."
             Write-Log "Mounting VHD and creating GPT/EFI/MSR/Windows partitions..."
-            $mountedVHD = Mount-VHD -Path $VHDPath -Passthru
+            $mountedVHD = Mount-VHD -Path $VHDPath -Passthru -ErrorAction Stop
             Register-TrackedMountedImage -ImagePath $VHDPath
             $vhdMountedForDeploy = $true
             try {
@@ -4200,6 +4280,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
             # EFI System Partition (260MB for better compatibility with old Win10)
             $efi = New-Partition -DiskNumber $diskNumber -Size 260MB -GptType "{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}" -AssignDriveLetter
+            if (-not $efi.DriveLetter) {
+                Write-Log "EFI partition created but no drive letter was assigned (all letters may be in use). Aborting." "ERROR"
+                throw "EFI partition has no drive letter"
+            }
             Format-Volume -Partition $efi -FileSystem FAT32 -NewFileSystemLabel "System" -Confirm:$false | Out-Null
 
             # MSR Partition
@@ -4207,6 +4291,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
             # Windows Partition (remaining space)
             $winPart = New-Partition -DiskNumber $diskNumber -UseMaximumSize -AssignDriveLetter
+            if (-not $winPart.DriveLetter) {
+                Write-Log "Windows partition created but no drive letter was assigned. Aborting." "ERROR"
+                throw "Windows partition has no drive letter"
+            }
             $driveLetter = $winPart.DriveLetter + ":"
             Format-Volume -Partition $winPart -FileSystem NTFS -NewFileSystemLabel $VMName -Confirm:$false | Out-Null
 
@@ -4556,9 +4644,9 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 }
             }
         }
-        if ($autoPlayChanged) {
+        if ($autoPlayGuard -ne $null) {
             try {
-                Restore-AutoPlayState -State $autoPlayOriginalState
+                Restore-AutoPlayState -State $autoPlayGuard
             } catch {
                 Write-Log "Could not restore AutoPlay state: $($_.Exception.Message)" "WARN"
             }
@@ -4583,8 +4671,7 @@ $btnUpdateGPU.Add_Click({
     if ($script:IsUpdatingGPU) { return }
     $script:IsUpdatingGPU = $true
 
-    $autoPlayChanged = $false
-    $autoPlayOriginalState = $null
+    $autoPlayGuard = $null
 
     try {
         # Gather selections
@@ -4628,6 +4715,18 @@ $btnUpdateGPU.Add_Click({
         $strictChecks = if ($ctrlGPU.ContainsKey("StrictChecks") -and $ctrlGPU["StrictChecks"]) { [bool]$ctrlGPU["StrictChecks"].Checked } else { $true }
         $removeOnlyMode = ($providerObj -and $null -eq $providerObj.Provider)
 
+        if ($removeOnlyMode) {
+            $confirmRemove = [System.Windows.Forms.MessageBox]::Show(
+                "You selected 'NONE - Remove GPU Adapter'.`n`nThis will remove the GPU-P adapter from $($selectedVMs.Count) VM(s).`n`nContinue?",
+                "Confirm GPU Adapter Removal",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($confirmRemove -ne [System.Windows.Forms.DialogResult]::Yes) {
+                Write-Log "GPU adapter removal cancelled by user." "INFO"
+                return
+            }
+        }
+
         if (-not $removeOnlyMode) {
             $preflightIssues = @(Test-GpuPPreFlight)
             foreach ($issue in $preflightIssues) {
@@ -4665,8 +4764,7 @@ $btnUpdateGPU.Add_Click({
         Write-Log "========================================" "INFO"
 
         # Disable AutoPlay
-        $autoPlayOriginalState = Get-AutoPlayState
-        $autoPlayChanged = Set-AutoPlay -Disable $true
+        $autoPlayGuard = Disable-AutoPlayGuarded
 
         foreach ($VMName in $selectedVMs) {
             $vhdPath = $null
@@ -4952,9 +5050,9 @@ $btnUpdateGPU.Add_Click({
     } catch {
         Write-ErrorWithGuidance -Context "GPU update" -ErrorRecord $_
     } finally {
-        if ($autoPlayChanged) {
+        if ($autoPlayGuard -ne $null) {
             try {
-                Restore-AutoPlayState -State $autoPlayOriginalState
+                Restore-AutoPlayState -State $autoPlayGuard
             } catch {
                 Write-Log "Could not restore AutoPlay state after GPU update: $($_.Exception.Message)" "WARN"
             }
@@ -4976,6 +5074,11 @@ $form.Add_FormClosing({
     if ($script:TabBrushNormal)   { $script:TabBrushNormal.Dispose() }
     # Dispose tooltip
     if ($toolTip)                 { $toolTip.Dispose() }
+    # Dispose cached fonts (moved here so they survive any final paint events)
+    foreach ($f in @($script:FontMain, $script:FontTabHeader, $script:FontHeader, $script:FontBoldButton,
+                     $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:ThemeFontGroupBox)) {
+        if ($f) { try { $f.Dispose() } catch {} }
+    }
 })
 
 #endregion
@@ -5000,11 +5103,6 @@ try {
     Write-Host "`n  Press Enter to exit..." -ForegroundColor Red
     Read-Host
 } finally {
-    # Dispose cached fonts
-    foreach ($f in @($script:FontMain, $script:FontTabHeader, $script:FontHeader, $script:FontBoldButton,
-                     $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:ThemeFontGroupBox)) {
-        if ($f) { try { $f.Dispose() } catch {} }
-    }
     if ($form) { $form.Dispose() }
 }
 

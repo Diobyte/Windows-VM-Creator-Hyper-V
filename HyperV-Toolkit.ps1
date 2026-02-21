@@ -518,6 +518,47 @@ function Stop-VMWithTimeout {
     }
 }
 
+function Get-VMPrimaryVhdPath {
+    param([string]$VMName)
+
+    try {
+        $hardDisks = @(Get-VMHardDiskDrive -VMName $VMName -ErrorAction Stop)
+        if ($hardDisks.Count -eq 0) { return $null }
+
+        try {
+            $firmware = Get-VMFirmware -VMName $VMName -ErrorAction SilentlyContinue
+            if ($firmware -and $firmware.BootOrder) {
+                foreach ($bootDevice in $firmware.BootOrder) {
+                    if ($bootDevice -and $bootDevice.GetType().Name -eq 'VMHardDiskDrive') {
+                        $bootPath = $bootDevice.Path
+                        if (-not [string]::IsNullOrWhiteSpace($bootPath) -and (Test-Path $bootPath)) {
+                            return $bootPath
+                        }
+                    }
+                }
+            }
+        } catch {
+            # Fall through to controller and first-disk heuristics
+        }
+
+        $controllerDisk = $hardDisks | Where-Object {
+            $_.ControllerNumber -eq 0 -and $_.ControllerLocation -eq 0
+        } | Select-Object -First 1
+        if ($controllerDisk -and -not [string]::IsNullOrWhiteSpace($controllerDisk.Path)) {
+            return $controllerDisk.Path
+        }
+
+        $firstExisting = $hardDisks | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.Path) -and (Test-Path $_.Path)
+        } | Select-Object -First 1
+        if ($firstExisting) { return $firstExisting.Path }
+
+        return $hardDisks[0].Path
+    } catch {
+        return $null
+    }
+}
+
 function Mount-VhdWithFallback {
     param([string]$ImagePath)
 
@@ -916,6 +957,121 @@ function Test-GpuPPreFlight {
     return $issues
 }
 
+function Test-GpuPHostReadiness {
+    param([bool]$RequireSriov = $false)
+
+    $errors = @()
+    $warnings = @()
+
+    try {
+        $partGpu = @(Get-VMHostPartitionableGpu -ErrorAction SilentlyContinue)
+        if (-not $partGpu -or $partGpu.Count -eq 0) {
+            $errors += "No partitionable GPUs were reported by Hyper-V on this host."
+        }
+    } catch {
+        $errors += "Failed to query partitionable GPUs: $($_.Exception.Message)"
+    }
+
+    try {
+        $sriovAdapters = @(Get-NetAdapterSriov -ErrorAction SilentlyContinue)
+        if (-not $sriovAdapters -or $sriovAdapters.Count -eq 0) {
+            if ($RequireSriov) {
+                $errors += "No SR-IOV-capable adapters detected (required for this host profile)."
+            } else {
+                $warnings += "No SR-IOV-capable adapters detected. On enterprise/clustered GPU-P hosts, SR-IOV is required."
+            }
+        } else {
+            $ready = $sriovAdapters | Where-Object {
+                $_.SriovEnabled -eq $true -or $_.SriovSupport -match 'Supported|Ready'
+            }
+            if (-not $ready) {
+                if ($RequireSriov) {
+                    $errors += "SR-IOV adapters found, but none are enabled/ready."
+                } else {
+                    $warnings += "SR-IOV adapters are present but not enabled/ready."
+                }
+            }
+        }
+    } catch {
+        if ($RequireSriov) {
+            $errors += "Failed to query SR-IOV state: $($_.Exception.Message)"
+        } else {
+            $warnings += "Could not validate SR-IOV state: $($_.Exception.Message)"
+        }
+    }
+
+    [PSCustomObject]@{
+        CanProceed = ($errors.Count -eq 0)
+        Errors = $errors
+        Warnings = $warnings
+    }
+}
+
+function Get-HostNvidiaDriverVersion {
+    try {
+        $nvidiaDrivers = Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.DeviceClass -eq 'DISPLAY' -and
+                ($_.Manufacturer -match 'NVIDIA' -or $_.DeviceName -match 'NVIDIA') -and
+                -not [string]::IsNullOrWhiteSpace($_.DriverVersion)
+            }
+
+        if (-not $nvidiaDrivers) { return "" }
+
+        $latest = $nvidiaDrivers |
+            Sort-Object {
+                try { [version]$_.DriverVersion } catch { [version]'0.0.0.0' }
+            } -Descending |
+            Select-Object -First 1
+
+        return [string]$latest.DriverVersion
+    } catch {
+        return ""
+    }
+}
+
+function Get-NvidiaDriverVersionFromGuestStore {
+    param([string]$MountLetter)
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($MountLetter)) { return "" }
+        $repoPath = Join-Path "$MountLetter\" 'Windows\System32\HostDriverStore\FileRepository'
+        if (-not (Test-Path $repoPath)) { return "" }
+
+        $infFiles = Get-ChildItem -Path $repoPath -Recurse -Filter '*.inf' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^nv.*\.inf$' }
+        if (-not $infFiles) { return "" }
+
+        foreach ($inf in $infFiles) {
+            try {
+                $driverVerLine = Select-String -Path $inf.FullName -Pattern '^\s*DriverVer\s*=\s*.+?(\d+\.\d+\.\d+\.\d+)' -CaseSensitive:$false -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($driverVerLine -and $driverVerLine.Matches.Count -gt 0) {
+                    return $driverVerLine.Matches[0].Groups[1].Value
+                }
+            } catch {
+                continue
+            }
+        }
+
+        return ""
+    } catch {
+        return ""
+    }
+}
+
+function Get-DriverVersionBranch {
+    param([string]$VersionString)
+
+    if ([string]::IsNullOrWhiteSpace($VersionString)) { return -1 }
+    try {
+        $segments = $VersionString.Split('.')
+        if ($segments.Count -lt 1) { return -1 }
+        return [int]$segments[0]
+    } catch {
+        return -1
+    }
+}
+
 function Get-GpuPartitionValues {
     <#
     .SYNOPSIS
@@ -923,17 +1079,40 @@ function Get-GpuPartitionValues {
         based on a resource allocation percentage (Diobyte Version 1 approach).
     #>
     param(
+        [string]$VMName,
         [ValidateRange(1,100)]
         [int]$Percentage = 100
     )
-    [double]$divider = [math]::Round(100 / $Percentage, 2)
-    # Use [UInt64] for Encode to avoid precision loss on the UInt64-max value
-    [UInt64]$encodeMax = [UInt64]::MaxValue
+
+    $adapter = $null
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($VMName)) {
+            $adapter = Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+    } catch {
+        $adapter = $null
+    }
+
+    [UInt64]$baseVRAM = 1000000000
+    [UInt64]$baseEncode = [UInt64]::MaxValue
+    [UInt64]$baseDecode = 1000000000
+    [UInt64]$baseCompute = 1000000000
+
+    if ($adapter) {
+        if ([UInt64]$adapter.MaxPartitionVRAM -gt 0) { $baseVRAM = [UInt64]$adapter.MaxPartitionVRAM }
+        if ([UInt64]$adapter.MaxPartitionEncode -gt 0) { $baseEncode = [UInt64]$adapter.MaxPartitionEncode }
+        if ([UInt64]$adapter.MaxPartitionDecode -gt 0) { $baseDecode = [UInt64]$adapter.MaxPartitionDecode }
+        if ([UInt64]$adapter.MaxPartitionCompute -gt 0) { $baseCompute = [UInt64]$adapter.MaxPartitionCompute }
+    }
+
+    $factor = ($Percentage / 100.0)
+    if ($factor -le 0) { $factor = 1.0 }
+
     return @{
-        VRAM    = [UInt64][math]::Floor(1000000000 / $divider)
-        Encode  = [UInt64][math]::Floor([double]$encodeMax / $divider)
-        Decode  = [UInt64][math]::Floor(1000000000 / $divider)
-        Compute = [UInt64][math]::Floor(1000000000 / $divider)
+        VRAM    = [UInt64][math]::Max(1, [math]::Floor([double]$baseVRAM * $factor))
+        Encode  = [UInt64][math]::Max(1, [math]::Floor([double]$baseEncode * $factor))
+        Decode  = [UInt64][math]::Max(1, [math]::Floor([double]$baseDecode * $factor))
+        Compute = [UInt64][math]::Max(1, [math]::Floor([double]$baseCompute * $factor))
     }
 }
 
@@ -1700,7 +1879,7 @@ function Set-GpuPartitionForVM {
         [int]$AllocationPercent = 100
     )
 
-    $partitionValues = Get-GpuPartitionValues -Percentage $AllocationPercent
+    $partitionValues = Get-GpuPartitionValues -VMName $VMName -Percentage $AllocationPercent
     Set-VMGpuPartitionAdapter -VMName $VMName `
         -MinPartitionVRAM $partitionValues.VRAM -MaxPartitionVRAM $partitionValues.VRAM -OptimalPartitionVRAM $partitionValues.VRAM `
         -MinPartitionEncode $partitionValues.Encode -MaxPartitionEncode $partitionValues.Encode -OptimalPartitionEncode $partitionValues.Encode `
@@ -2398,6 +2577,14 @@ $ctrlGPU["CopySvcDriver"].Location = New-Object System.Drawing.Point(12, 72)
 $ctrlGPU["CopySvcDriver"].ForeColor = [System.Drawing.Color]::White
 $grpGPUOpts.Controls.Add($ctrlGPU["CopySvcDriver"])
 
+$ctrlGPU["StrictChecks"] = New-Object System.Windows.Forms.CheckBox
+$ctrlGPU["StrictChecks"].Text     = "Strict GPU safety checks"
+$ctrlGPU["StrictChecks"].AutoSize = $true
+$ctrlGPU["StrictChecks"].Checked  = $true
+$ctrlGPU["StrictChecks"].Location = New-Object System.Drawing.Point(12, 96)
+$ctrlGPU["StrictChecks"].ForeColor = [System.Drawing.Color]::White
+$grpGPUOpts.Controls.Add($ctrlGPU["StrictChecks"])
+
 # Update GPU Button
 $btnUpdateGPU           = New-Object System.Windows.Forms.Button
 $btnUpdateGPU.Text      = "Update GPU Drivers"
@@ -2715,7 +2902,7 @@ function Update-TabLayouts {
             $grpGPUSettings.Size = New-Object System.Drawing.Size($gpuWidth - 4, 190)
 
             $grpGPUOpts.Location = New-Object System.Drawing.Point($tabPadding, $grpGPUSettings.Bottom + $sectionGap)
-            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuWidth - 4, 95)
+            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuWidth - 4, 122)
 
             $btnUpdateGPU.Location = New-Object System.Drawing.Point($tabPadding + [Math]::Max(0, [int](($gpuWidth - $btnUpdateGPU.Width) / 2)), $grpGPUOpts.Bottom + $sectionGap)
         } else {
@@ -2729,7 +2916,7 @@ function Update-TabLayouts {
             $grpGPUSettings.Size = New-Object System.Drawing.Size($gpuRightWidth, 190)
 
             $grpGPUOpts.Location = New-Object System.Drawing.Point($gpuRightX, 200)
-            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuRightWidth, 95)
+            $grpGPUOpts.Size = New-Object System.Drawing.Size($gpuRightWidth, 122)
 
             $btnUpdateGPU.Location = New-Object System.Drawing.Point($gpuRightX + [Math]::Max(0, [int](($gpuRightWidth - $btnUpdateGPU.Width) / 2)), 448)
         }
@@ -2926,6 +3113,7 @@ $toolTip.SetToolTip($ctrlCreate["GoldenImage"], "Creates the VM from a parent go
 $toolTip.SetToolTip($ctrlGPU["StartVM"], "Starts selected VMs automatically after GPU adapter update and driver injection.")
 $toolTip.SetToolTip($ctrlGPU["AutoExpand"], "Automatically expands guest VHD if space is insufficient during driver copy to avoid mid-process failures.")
 $toolTip.SetToolTip($ctrlGPU["CopySvcDriver"], "Copies GPU service driver components into the guest HostDriverStore for improved compatibility on some driver stacks.")
+$toolTip.SetToolTip($ctrlGPU["StrictChecks"], "Enforces additional GPU-P safety checks (host readiness, SR-IOV guidance, nested virtualization risk for NVIDIA).")
 $toolTip.SetToolTip($ctrlGPU["GpuAllocSlider"], "Controls GPU partition resource share assigned to the VM.")
 $toolTip.SetToolTip($btnUpdateGPU, "Inject/update GPU-P drivers and optional services into selected VMs.")
 $toolTip.SetToolTip($ctrlGPU["VmSearch"], "Type to quickly filter VMs by name.")
@@ -3406,6 +3594,8 @@ $btnCreateVM.Add_Click({
             Resolve-GuestWindowsProfile -DetectedWinVersion $script:DetectedWinVersion -DetectedBuild $script:DetectedBuild
         }
         $IsWin11 = $guestProfile.IsWindows11
+        $effectiveDetectedBuild = if ($UseGoldenImage) { [int]$guestProfile.Build } else { [int]$script:DetectedBuild }
+        $effectiveDetectedOsName = if ($UseGoldenImage) { $guestProfile.Name } else { $script:DetectedWinVersion }
 
         if ($StrictLegacyMode) {
             if ($IsWin11) {
@@ -3463,7 +3653,25 @@ $btnCreateVM.Add_Click({
         }
         if (-not (Test-DirectoryWritable -Path $VMLocBase)) { Write-Log "VM Location is not writable: $VMLocBase" "ERROR"; return }
 
-        $requiredDiskGB = if ($FixedVHD) { $DiskGB + 8 } else { 24 }  # Fixed VHD needs full size; dynamic needs ~24 GB initially (OS + pagefile + drivers)
+        if ($UseGoldenImage) {
+            # Golden mode creates only a differencing disk at this stage.
+            $requiredDiskGB = 2
+        } elseif ($FixedVHD) {
+            # Fixed VHD allocates full disk size up front.
+            $requiredDiskGB = $DiskGB + 8
+        } else {
+            # Dynamic VHD baseline plus selected post-install workload overhead.
+            $dynamicRequiredDiskGB = 24
+            $dynamicOverheadGB = 0
+            if ($ctrlCreate["Parsec"].Checked)   { $dynamicOverheadGB += 2 }
+            if ($ctrlCreate["VBCable"].Checked)  { $dynamicOverheadGB += 2 }
+            if ($ctrlCreate["USBMMIDD"].Checked) { $dynamicOverheadGB += 2 }
+            if ($ctrlCreate["Share"].Checked)    { $dynamicOverheadGB += 1 }
+            if ($ctrlCreate["FullUpdate"].Checked) { $dynamicOverheadGB += 8 }
+
+            # Keep estimate realistic for dynamic disks: no more than VHD max + modest temp overhead.
+            $requiredDiskGB = [math]::Min(($DiskGB + 4), ($dynamicRequiredDiskGB + $dynamicOverheadGB))
+        }
         $freeDiskGB = Get-PathAvailableSpaceGB -Path $VMLocBase
         if ($freeDiskGB -ge 0 -and $freeDiskGB -lt $requiredDiskGB) {
             Write-Log "Insufficient disk space in VM location. Need about $requiredDiskGB GB free, found $freeDiskGB GB." "ERROR"
@@ -3562,9 +3770,9 @@ $btnCreateVM.Add_Click({
         foreach ($line in $preflightLines) { Write-Log "  $line" "INFO" }
 
         # ---- Host/VM version match check ----
-        if ($script:DetectedBuild -gt 0 -and $script:HostBuild -gt 0) {
-            if ([math]::Abs($script:DetectedBuild - $script:HostBuild) -gt 5000) {
-                Write-Log "WARNING: Large version gap between host (Build $($script:HostBuild)) and VM image (Build $($script:DetectedBuild))." "WARN"
+        if ($effectiveDetectedBuild -gt 0 -and $script:HostBuild -gt 0) {
+            if ([math]::Abs($effectiveDetectedBuild - $script:HostBuild) -gt 5000) {
+                Write-Log "WARNING: Large version gap between host (Build $($script:HostBuild)) and VM image (Build $effectiveDetectedBuild)." "WARN"
                 Write-Log "Mismatched Windows versions can cause GPU-P driver issues or BSODs. Matching versions recommended." "WARN"
             }
         }
@@ -3575,7 +3783,7 @@ $btnCreateVM.Add_Click({
         Update-CreateProgress -Percent 6 -Status "Preparing VM creation workflow..."
         Write-Log "========================================" "INFO"
         Write-Log "Starting VM creation: $VMName" "INFO"
-        Write-Log "OS: $($script:DetectedWinVersion) Build $($script:DetectedBuild)" "INFO"
+        Write-Log "OS: $effectiveDetectedOsName Build $effectiveDetectedBuild" "INFO"
         Write-Log "Secure Boot: $EnableSecureBoot | TPM: $EnableTPM" "INFO"
         Write-Log "========================================" "INFO"
 
@@ -3647,9 +3855,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- Parsec ---'
                 'echo [%date% %time%] Downloading Parsec... >> %LOGFILE%'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://builds.parsecgaming.com/package/parsec-windows.exe'' -OutFile ''%WORKDIR%\parsec.exe''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\parsec.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Parsec'') { throw ''Parsec signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] Parsec download/signature validation failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'if errorlevel 1 (echo [%date% %time%] Parsec download/signature validation failed >> %LOGFILE% & goto :AfterParsec)'
                 'echo [%date% %time%] Installing Parsec... >> %LOGFILE%'
                 'start /wait %WORKDIR%\parsec.exe /silent /percomputer /norun /vdd'
+                ':AfterParsec'
                 ''
             )
         }
@@ -3658,13 +3867,14 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- VB Cable ---'
                 'echo [%date% %time%] Downloading VB Cable... >> %LOGFILE%'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'' -OutFile ''%WORKDIR%\vb.zip''" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] VB Cable download failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable download failed >> %LOGFILE% & goto :AfterVBCable)'
                 'if not exist "%WORKDIR%\VB" mkdir "%WORKDIR%\VB"'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; Expand-Archive -Path ''%WORKDIR%\vb.zip'' -DestinationPath ''%WORKDIR%\VB'' -Force" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] VB Cable archive extraction failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable archive extraction failed >> %LOGFILE% & goto :AfterVBCable)'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\VB\VBCABLE_Setup_x64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''VB[- ]Audio|Vincent Burel'') { throw ''VB Cable signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] VB Cable signature validation failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'if errorlevel 1 (echo [%date% %time%] VB Cable signature validation failed >> %LOGFILE% & goto :AfterVBCable)'
                 'start /wait "" "%WORKDIR%\VB\VBCABLE_Setup_x64.exe" -h -i -H -n'
+                ':AfterVBCable'
                 ''
             )
         }
@@ -3673,12 +3883,12 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 ':: --- Virtual Display Driver ---'
                 'echo [%date% %time%] Downloading USBMMIDD... >> %LOGFILE%'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = ''SilentlyContinue''; Invoke-WebRequest -UseBasicParsing -Uri ''https://www.amyuni.com/downloads/usbmmidd_v2.zip'' -OutFile ''%WORKDIR%\usbmmidd_v2.zip''" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] USBMMIDD download failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD download failed >> %LOGFILE% & goto :AfterUSBMMIDD)'
                 'if not exist "%WORKDIR%\usbmmidd_v2" mkdir "%WORKDIR%\usbmmidd_v2"'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; Expand-Archive -Path ''%WORKDIR%\usbmmidd_v2.zip'' -DestinationPath ''%WORKDIR%'' -Force" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] USBMMIDD archive extraction failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD archive extraction failed >> %LOGFILE% & goto :AfterUSBMMIDD)'
                 'powershell -NoProfile -Command "$ErrorActionPreference = ''Stop''; $sig = Get-AuthenticodeSignature ''%WORKDIR%\usbmmidd_v2\deviceinstaller64.exe''; if ($sig.Status -ne ''Valid'' -or $sig.SignerCertificate.Subject -notmatch ''Amyuni'') { throw ''USBMMIDD signature validation failed (status/signer mismatch)'' }" >> %LOGFILE% 2>&1'
-                'if errorlevel 1 (echo [%date% %time%] USBMMIDD signature validation failed >> %LOGFILE% & goto :SetupCompleteCleanup)'
+                'if errorlevel 1 (echo [%date% %time%] USBMMIDD signature validation failed >> %LOGFILE% & goto :AfterUSBMMIDD)'
                 '@echo off'
                 'setlocal DisableDelayedExpansion'
                 'echo @cd /d "%%~dp0" > "%WORKDIR%\usbmmidd_v2\usbmmidd2.bat"'
@@ -3696,6 +3906,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 'echo. >> "%WORKDIR%\usbmmidd_v2\usbmmidd2.bat"'
                 'echo :end >> "%WORKDIR%\usbmmidd_v2\usbmmidd2.bat"'
                 'start /wait %WORKDIR%\usbmmidd_v2\usbmmidd2.bat'
+                ':AfterUSBMMIDD'
                 ''
             )
         }
@@ -4112,7 +4323,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
             if ($attachISOForRecovery -and $ResetBootOrder) {
                 try {
-                    $hdd = Get-VMHardDiskDrive -VMName $VMName | Select-Object -First 1
+                    $hdd = Get-VMHardDiskDrive -VMName $VMName | Where-Object { $_.Path -eq $VHDPath } | Select-Object -First 1
+                    if (-not $hdd) {
+                        $hdd = Get-VMHardDiskDrive -VMName $VMName | Select-Object -First 1
+                    }
                     if ($hdd) {
                         Set-VMFirmware -VMName $VMName -FirstBootDevice $hdd
                         Write-Log "Recovery boot reset: boot order switched back to VHD." "OK"
@@ -4213,6 +4427,35 @@ $btnUpdateGPU.Add_Click({
         $copySvcDriver = $ctrlGPU["CopySvcDriver"].Checked
         $gpuAllocPercent = [int]$ctrlGPU["GpuAllocSlider"].Value
         $startAfterUpdate = $ctrlGPU["StartVM"].Checked
+        $strictChecks = if ($ctrlGPU.ContainsKey("StrictChecks") -and $ctrlGPU["StrictChecks"]) { [bool]$ctrlGPU["StrictChecks"].Checked } else { $true }
+        $removeOnlyMode = ($providerObj -and $null -eq $providerObj.Provider)
+
+        if (-not $removeOnlyMode) {
+            $preflightIssues = @(Test-GpuPPreFlight)
+            foreach ($issue in $preflightIssues) {
+                if ($issue -match '^ERROR:') { Write-Log $issue "ERROR" }
+                elseif ($issue -match '^WARNING:') { Write-Log $issue "WARN" }
+                else { Write-Log $issue "INFO" }
+            }
+
+            $requireSriov = ($script:HostOsName -match 'Windows Server')
+            $hostReadiness = Test-GpuPHostReadiness -RequireSriov:$requireSriov
+            foreach ($warn in $hostReadiness.Warnings) { Write-Log "GPU host readiness: $warn" "WARN" }
+            if (-not $hostReadiness.CanProceed) {
+                foreach ($err in $hostReadiness.Errors) { Write-Log "GPU host readiness: $err" "ERROR" }
+                if ($strictChecks) {
+                    Write-Log "Strict GPU safety checks are enabled. Aborting GPU update." "ERROR"
+                    return
+                }
+                Write-Log "Continuing despite host readiness errors because strict checks are disabled." "WARN"
+            }
+        }
+
+        $hostNvidiaVersion = Get-HostNvidiaDriverVersion
+        $hostNvidiaBranch = Get-DriverVersionBranch -VersionString $hostNvidiaVersion
+        if ($hostNvidiaVersion) {
+            Write-Log "Host NVIDIA driver version detected: $hostNvidiaVersion (branch $hostNvidiaBranch)" "INFO"
+        }
 
         # Disable UI
         $tabControl.Enabled  = $false
@@ -4234,15 +4477,28 @@ $btnUpdateGPU.Add_Click({
             $skipDriverInjection = $false
             $gpuAdapterConfigured = $false
             $startVmPending = $false
-            $vmWasRunning = $false
 
             try {
                 $vm = Get-VM -Name $VMName -ErrorAction Stop
                 Write-Log "Processing VM: $VMName"
 
+                if (-not $removeOnlyMode -and $gpuVendor -eq 'NVIDIA') {
+                    try {
+                        $vmProcessor = Get-VMProcessor -VMName $VMName -ErrorAction SilentlyContinue
+                        if ($vmProcessor -and $vmProcessor.ExposeVirtualizationExtensions) {
+                            if ($strictChecks) {
+                                Write-Log "[$VMName] Nested virtualization is enabled. NVIDIA vGPU stacks may be unsupported in this state. Skipping due to strict checks." "ERROR"
+                                continue
+                            }
+                            Write-Log "[$VMName] Nested virtualization is enabled. NVIDIA vGPU stacks may be unsupported in this state." "WARN"
+                        }
+                    } catch {
+                        Write-Log "[$VMName] Could not verify nested virtualization state: $($_.Exception.Message)" "WARN"
+                    }
+                }
+
                 # Shutdown VM if running
                 if ($vm.State -eq 'Running') {
-                    $vmWasRunning = $true
                     Write-Log "[$VMName] Shutting down..."
                     if (-not (Stop-VMWithTimeout -VMName $VMName -TimeoutSec 60)) {
                         Write-Log "[$VMName] VM did not stop cleanly. Skipping to avoid corruption." "ERROR"
@@ -4311,9 +4567,9 @@ $btnUpdateGPU.Add_Click({
                 }
 
                 # Get VHD path
-                $vhdPath = (Get-VMHardDiskDrive -VMName $VMName | Select-Object -First 1).Path
-                if (-not $vhdPath) {
-                    Write-Log "[$VMName] No VHDX found!" "ERROR"
+                $vhdPath = Get-VMPrimaryVhdPath -VMName $VMName
+                if (-not $vhdPath -or -not (Test-Path $vhdPath)) {
+                    Write-Log "[$VMName] No primary VHD path found." "ERROR"
                     continue
                 }
                 Write-Log "[$VMName] Found VHDX: $vhdPath"
@@ -4363,6 +4619,19 @@ $btnUpdateGPU.Add_Click({
                     continue
                 }
                 Write-Log "[$VMName] Mounted at $mountLetter"
+
+                if (-not $removeOnlyMode -and $gpuVendor -eq 'NVIDIA' -and $hostNvidiaVersion) {
+                    $guestNvidiaVersion = Get-NvidiaDriverVersionFromGuestStore -MountLetter $mountLetter
+                    if ($guestNvidiaVersion) {
+                        $guestNvidiaBranch = Get-DriverVersionBranch -VersionString $guestNvidiaVersion
+                        Write-Log "[$VMName] Guest NVIDIA driver version detected: $guestNvidiaVersion (branch $guestNvidiaBranch)" "INFO"
+                        if ($guestNvidiaBranch -ge 0 -and $hostNvidiaBranch -ge 0 -and $guestNvidiaBranch -ne $hostNvidiaBranch) {
+                            Write-Log "[$VMName] NVIDIA host/guest driver branch mismatch detected (host=$hostNvidiaBranch, guest=$guestNvidiaBranch). Host branch files will be injected." "WARN"
+                        }
+                    } else {
+                        Write-Log "[$VMName] No existing NVIDIA guest driver metadata found in HostDriverStore (fresh or non-NVIDIA guest state)." "INFO"
+                    }
+                }
 
                 # ---- Copy GPU drivers (smart or full) ----
                 $copyResult = Copy-GpuDriverFolders -VMName $VMName -MountLetter $mountLetter `

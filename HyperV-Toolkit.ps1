@@ -692,6 +692,7 @@ function Start-VMWithRetry {
             }
         }
     }
+    return $false
 }
 
 function Get-PathAvailableSpaceGB {
@@ -863,6 +864,8 @@ function Update-CreateProgress {
         $ctrlCreate["CreateStatus"].Text = $Status
         $ctrlCreate["CreateStatus"].Refresh()
     }
+    # Pump the Windows message queue so the UI stays responsive during long sync operations
+    try { [System.Windows.Forms.Application]::DoEvents() } catch { }
 }
 
 function Remove-PartialVmArtifacts {
@@ -894,6 +897,15 @@ function Remove-PartialVmArtifacts {
                 # Fallback to Dismount-VHD if Dismount-ImageRetry failed
                 Dismount-VHD -Path $VHDPath -ErrorAction SilentlyContinue
                 Unregister-TrackedMountedImage -ImagePath $VHDPath
+            }
+            # Delete the stale VHDX file after successful dismount
+            try {
+                if (Test-Path $VHDPath) {
+                    Remove-Item -Path $VHDPath -Force -ErrorAction Stop
+                    Write-Log "Removed stale VHD file: $VHDPath" "WARN"
+                }
+            } catch {
+                Write-Log "Rollback warning (VHD file delete): $($_.Exception.Message)" "WARN"
             }
         }
     } catch {
@@ -1487,7 +1499,7 @@ function Invoke-DismApplyImage {
                 $partial = @(Receive-Job $dismJob -ErrorAction SilentlyContinue)
                 foreach ($line in $partial) {
                     $lineStr = "$line".Trim()
-                    if ($lineStr -match '^__DISM_EXIT__:(\d+)$') {
+                    if ($lineStr -match '^__DISM_EXIT__:(-?\d+)$') {
                         $dismExitCode = [int]$Matches[1]
                         continue
                     }
@@ -1528,7 +1540,7 @@ function Invoke-DismApplyImage {
             $remaining = @(Receive-Job $dismJob -ErrorAction SilentlyContinue)
             foreach ($line in $remaining) {
                 $lineStr = "$line".Trim()
-                if ($lineStr -match '^__DISM_EXIT__:(\d+)$') {
+                if ($lineStr -match '^__DISM_EXIT__:(-?\d+)$') {
                     $dismExitCode = [int]$Matches[1]
                     continue
                 }
@@ -1617,28 +1629,89 @@ function New-UnattendXml {
         $xmlArch = $script:HostArch   # fallback: 'amd64' or 'arm64'
     }
 
-    # Build the BypassNRO command for specialize pass (helps Win11 offline setup)
-    $bypassBlock = ""
+    # ---- Build specialize Deployment RunSynchronous commands ----
+    # These run before OOBE during first-boot mini-setup (specialize pass)
+    $specDeployCmds = [System.Collections.Generic.List[string]]::new()
+
+    # Win11: bypass OOBE network requirement for offline local-account setup
     if ($IsWindows11) {
-        $bypassBlock = @"
-    <component name="Microsoft-Windows-Deployment" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+        $specDeployCmds.Add('reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f')
+    }
+
+    # ContentDeliveryManager debloat: load default user hive, suppress ads/bloatware for all future profiles
+    $specDeployCmds.Add('reg.exe load "HKU\mount" "C:\Users\Default\NTUSER.DAT"')
+    $cdmBase = 'HKU\mount\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+    @('ContentDeliveryAllowed','FeatureManagementEnabled','OEMPreInstalledAppsEnabled',
+      'PreInstalledAppsEnabled','PreInstalledAppsEverEnabled','SilentInstalledAppsEnabled',
+      'SoftLandingEnabled','SubscribedContentEnabled','SubscribedContent-310093Enabled',
+      'SubscribedContent-338387Enabled','SubscribedContent-338388Enabled',
+      'SubscribedContent-338389Enabled','SubscribedContent-338393Enabled',
+      'SubscribedContent-353698Enabled','SystemPaneSuggestionsEnabled') | ForEach-Object {
+        $specDeployCmds.Add("reg.exe add `"$cdmBase`" /v `"$_`" /t REG_DWORD /d 0 /f")
+    }
+    $ucBase = 'HKU\mount\Software\Policies\Microsoft\Windows\CloudContent'
+    @('DisableCloudOptimizedContent','DisableWindowsConsumerFeatures','DisableConsumerAccountStateContent') | ForEach-Object {
+        $specDeployCmds.Add("reg.exe add `"$ucBase`" /v `"$_`" /t REG_DWORD /d 1 /f")
+    }
+    $specDeployCmds.Add('reg.exe unload "HKU\mount"')
+
+    # Machine-level CloudContent policies
+    $mcBase = 'HKLM\Software\Policies\Microsoft\Windows\CloudContent'
+    @('DisableCloudOptimizedContent','DisableWindowsConsumerFeatures','DisableConsumerAccountStateContent') | ForEach-Object {
+        $specDeployCmds.Add("reg.exe add `"$mcBase`" /v `"$_`" /t REG_DWORD /d 1 /f")
+    }
+
+    # Set network location to Home (enables discovery by default)
+    $specDeployCmds.Add('reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures\FirstNetwork" /v Category /t REG_DWORD /d 1 /f')
+
+    # Build XML for specialize RunSynchronous commands
+    $specRunSyncParts = @()
+    for ($i = 0; $i -lt $specDeployCmds.Count; $i++) {
+        $order = $i + 1
+        $cmd = $specDeployCmds[$i]
+        $specRunSyncParts += @"
+        <RunSynchronousCommand wcm:action="add">
+          <Order>$order</Order>
+          <Path>$cmd</Path>
+        </RunSynchronousCommand>
+"@
+    }
+    $specRunSyncXml = $specRunSyncParts -join "`n"
+
+    # Win11 windowsPE: LabConfig bypasses (belt-and-suspenders for requirement checks)
+    $windowsPeRunSync = ""
+    if ($IsWindows11) {
+        $windowsPeRunSync = @"
+
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Path>reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\MoSetup" /v AllowUpgradesWithUnsupportedTPMOrCPU /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
-    </component>
 "@
     }
 
+    # AutoLogon block (high count for persistent auto-logon, matching dockur convention)
     $autoLogonBlock = ""
     if ($EnableAutoLogon) {
         $autoLogonBlock = @"
       <AutoLogon>
         <Username>$xmlUsername</Username>
         <Enabled>true</Enabled>
-        <LogonCount>3</LogonCount>
+        <LogonCount>999</LogonCount>
         <Password>
           <Value>$xmlPasswordB64</Value>
           <PlainText>false</PlainText>
@@ -1650,58 +1723,103 @@ function New-UnattendXml {
     return @"
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-  <settings pass="offlineServicing"></settings>
+  <settings pass="offlineServicing">
+    <component name="Microsoft-Windows-LUA-Settings" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <EnableLUA>false</EnableLUA>
+    </component>
+  </settings>
 
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <SetupUILanguage>
-                <UILanguage>$xmlUiLang</UILanguage>
+        <UILanguage>$xmlUiLang</UILanguage>
       </SetupUILanguage>
-            <InputLocale>$xmlKeyboard</InputLocale>
-            <SystemLocale>$xmlSystemLoc</SystemLocale>
-            <UILanguage>$xmlUiLang</UILanguage>
-            <UserLocale>$xmlUserLoc</UserLocale>
+      <InputLocale>$xmlKeyboard</InputLocale>
+      <SystemLocale>$xmlSystemLoc</SystemLocale>
+      <UILanguage>$xmlUiLang</UILanguage>
+      <UserLocale>$xmlUserLoc</UserLocale>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <UserData>
         <AcceptEula>true</AcceptEula>
       </UserData>
-      <UseConfigurationSet>false</UseConfigurationSet>
+      <EnableFirewall>false</EnableFirewall>
+      <Diagnostics>
+        <OptIn>false</OptIn>
+      </Diagnostics>
+      <UseConfigurationSet>false</UseConfigurationSet>$windowsPeRunSync
     </component>
   </settings>
 
-  <settings pass="generalize"></settings>
+  <settings pass="generalize">
+    <component name="Microsoft-Windows-Security-SPP" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SkipRearm>1</SkipRearm>
+    </component>
+  </settings>
 
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-            <ComputerName>$xmlVMName</ComputerName>
-            <TimeZone>$xmlTimezone</TimeZone>
+      <ComputerName>$xmlVMName</ComputerName>
+      <TimeZone>$xmlTimezone</TimeZone>
     </component>
-$bypassBlock
+    <component name="Microsoft-Windows-Security-SPP-UX" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SkipAutoActivation>true</SkipAutoActivation>
+    </component>
+    <component name="Microsoft-Windows-ErrorReportingCore" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <DisableWER>1</DisableWER>
+    </component>
+    <component name="Microsoft-Windows-SQMApi" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <CEIPEnabled>0</CEIPEnabled>
+    </component>
+    <component name="Microsoft-Windows-SystemRestore-Main" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <DisableSR>1</DisableSR>
+    </component>
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>$xmlKeyboard</InputLocale>
+      <SystemLocale>$xmlSystemLoc</SystemLocale>
+      <UILanguage>$xmlUiLang</UILanguage>
+      <UserLocale>$xmlUserLoc</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+$specRunSyncXml
+      </RunSynchronous>
+    </component>
   </settings>
 
   <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-SecureStartup-FilterDriver" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <PreventDeviceEncryption>true</PreventDeviceEncryption>
+    </component>
+    <component name="Microsoft-Windows-EnhancedStorage-Adm" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <TCGSecurityActivationDisabled>1</TCGSecurityActivationDisabled>
+    </component>
     <component name="Microsoft-Windows-International-Core" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-            <InputLocale>$xmlKeyboard</InputLocale>
-            <SystemLocale>$xmlSystemLoc</SystemLocale>
-            <UILanguage>$xmlUiLang</UILanguage>
-            <UserLocale>$xmlUserLoc</UserLocale>
+      <InputLocale>$xmlKeyboard</InputLocale>
+      <SystemLocale>$xmlSystemLoc</SystemLocale>
+      <UILanguage>$xmlUiLang</UILanguage>
+      <UserLocale>$xmlUserLoc</UserLocale>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$xmlArch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <UserAccounts>
         <LocalAccounts>
           <LocalAccount wcm:action="add">
-                        <Name>$xmlUsername</Name>
-                        <DisplayName>$xmlUsername</DisplayName>
+            <Name>$xmlUsername</Name>
+            <DisplayName>$xmlUsername</DisplayName>
             <Group>Administrators</Group>
             <Password>
-                            <Value>$xmlPasswordB64</Value>
+              <Value>$xmlPasswordB64</Value>
               <PlainText>false</PlainText>
             </Password>
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
 $autoLogonBlock
+      <Display>
+        <ColorDepth>32</ColorDepth>
+        <HorizontalResolution>1920</HorizontalResolution>
+        <VerticalResolution>1080</VerticalResolution>
+      </Display>
       <OOBE>
         <ProtectYourPC>3</ProtectYourPC>
         <HideEULAPage>true</HideEULAPage>
@@ -1709,13 +1827,105 @@ $autoLogonBlock
         <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <NetworkLocation>Home</NetworkLocation>
+        <SkipUserOOBE>true</SkipUserOOBE>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
       </OOBE>
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <!-- Username is validated to ^[a-zA-Z0-9]+$ so CMD-safe without extra escaping -->
-                      <CommandLine>powershell -NoProfile -Command "try { if (Get-Command Set-LocalUser -ErrorAction SilentlyContinue) { Set-LocalUser -Name '$xmlUsername' -PasswordNeverExpires $true } else { &amp; net.exe user '$xmlUsername' /expires:never | Out-Null } } catch { &amp; net.exe user '$xmlUsername' /expires:never | Out-Null }"</CommandLine>
+          <CommandLine>powershell.exe -NoProfile -NonInteractive -Command "try { Set-LocalUser -Name '$xmlUsername' -PasswordNeverExpires 1 } catch { net.exe user '$xmlUsername' /expires:never }"</CommandLine>
           <Description>Disable Password Expiration</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>cmd /C POWERCFG -H OFF</CommandLine>
+          <Description>Disable Hibernation</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <CommandLine>cmd /C POWERCFG -X -monitor-timeout-ac 0</CommandLine>
+          <Description>Disable monitor blanking</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <CommandLine>cmd /C POWERCFG -X -standby-timeout-ac 0</CommandLine>
+          <Description>Disable Sleep</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <CommandLine>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Power" /v "HibernateFileSizePercent" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Zero Hibernation File</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <CommandLine>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Power" /v "HibernateEnabled" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Disable Hibernation Registry</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <CommandLine>reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "HideFirstRunExperience" /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>Disable Edge first-run experience</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <CommandLine>reg.exe add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "HideFileExt" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Show file extensions in Explorer</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <CommandLine>reg.exe add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowCopilotButton" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Hide Copilot button</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>10</Order>
+          <CommandLine>reg.exe add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Remove Task View from Taskbar</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>11</Order>
+          <CommandLine>reg.exe add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarDa" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Remove Widgets from Taskbar</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>12</Order>
+          <CommandLine>reg.exe add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Remove Chat from Taskbar</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>13</Order>
+          <CommandLine>reg.exe add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v "SearchboxTaskbarMode" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Remove Search from Taskbar</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>14</Order>
+          <CommandLine>netsh advfirewall firewall set rule group="@FirewallAPI.dll,-32752" new enable=Yes</CommandLine>
+          <Description>Enable Network Discovery</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>15</Order>
+          <CommandLine>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff" /f</CommandLine>
+          <Description>Disable Network Discovery popup</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>16</Order>
+          <CommandLine>netsh advfirewall firewall set rule group="@FirewallAPI.dll,-28502" new enable=Yes</CommandLine>
+          <Description>Enable File Sharing</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>17</Order>
+          <CommandLine>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device" /v "DevicePasswordLessBuildVersion" /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Enable passwordless sign-in option</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>18</Order>
+          <CommandLine>reg.exe add "HKCU\Control Panel\UnsupportedHardwareNotificationCache" /v SV1 /d 0 /t REG_DWORD /f</CommandLine>
+          <Description>Disable unsupported hardware notification</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>19</Order>
+          <CommandLine>reg.exe add "HKCU\Control Panel\UnsupportedHardwareNotificationCache" /v SV2 /d 0 /t REG_DWORD /f</CommandLine>
+          <Description>Disable unsupported hardware notification</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
@@ -1817,10 +2027,10 @@ function Get-GpuDriverStoreFolders {
     $patterns = switch ($GpuVendor) {
         "NVIDIA" { @('nv_*', 'nvhd*', 'nvlt*', 'nvmd*', 'nvra*', 'nvsr*', 'nvwm*', 'nvam*') }
         "AMD"    { @('u0*', 'c0*', 'amd*', 'ati*') }
-        "Intel"  { @('igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit*') }
+        "Intel"  { @('igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit_d*') }
         default  { @('nv_*', 'nvhd*', 'nvlt*', 'nvmd*', 'nvra*', 'nvsr*', 'nvwm*',
                       'u0*', 'c0*', 'amd*', 'ati*',
-                      'igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit*') }
+                      'igfx*', 'iigd*', 'cui_*', 'dch_*', 'kit_d*') }
     }
     foreach ($p in $patterns) {
         Get-ChildItem $DriverStore -Directory -Filter $p -ErrorAction SilentlyContinue |
@@ -1926,6 +2136,11 @@ function Copy-GpuDriverFolders {
         [bool]$SmartCopy = $true,
         [bool]$AutoExpand = $true
     )
+
+    if ([string]::IsNullOrWhiteSpace($MountLetter)) {
+        Write-Log "[$VMName] Mount letter is null or empty. Cannot copy GPU drivers." "ERROR"
+        return @{ Success = $false; MountLetter = $MountLetter }
+    }
 
     $HostDriverStore = "$env:SystemRoot\System32\DriverStore\FileRepository"
     $VMDriverStore   = "Windows\System32\HostDriverStore\FileRepository"
@@ -3772,6 +3987,21 @@ $ctrlCreate["NestedNetFollowup"].Add_CheckedChanged({
     Update-RoutingHint
 })
 
+# Mutual exclusion: PauseUpdate and FullUpdate conflict
+$ctrlCreate["PauseUpdate"].Add_CheckedChanged({
+    if ($ctrlCreate["PauseUpdate"].Checked -and $ctrlCreate["FullUpdate"].Checked) {
+        $ctrlCreate["FullUpdate"].Checked = $false
+        Write-Log "Full Windows Updates was disabled because Pause Updates is enabled (they conflict)." "INFO"
+    }
+})
+
+$ctrlCreate["FullUpdate"].Add_CheckedChanged({
+    if ($ctrlCreate["FullUpdate"].Checked -and $ctrlCreate["PauseUpdate"].Checked) {
+        $ctrlCreate["PauseUpdate"].Checked = $false
+        Write-Log "Pause Updates was disabled because Full Windows Updates is enabled (they conflict)." "INFO"
+    }
+})
+
 # ---- Update OS info when edition changes ----
 $ctrlCreate["Edition"].Add_SelectedIndexChanged({
     $selectedEdition = $ctrlCreate["Edition"].SelectedItem
@@ -4492,6 +4722,19 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 }
             }
         } else {
+            # Golden Image mode: dismount any previously-mounted ISO to avoid a lingering mount
+            if ($script:MountedISO) {
+                try {
+                    if (Dismount-ImageRetry -ImagePath $script:MountedISO.ImagePath -MaxRetries 2) {
+                        Write-Log "Dismounted previously-mounted ISO (not needed for golden image mode)."
+                    }
+                } catch {
+                    Write-Log "ISO dismount warning (golden mode): $($_.Exception.Message)" "WARN"
+                } finally {
+                    $script:MountedISO = $null
+                }
+            }
+
             Update-CreateProgress -Percent 30 -Status "Creating differencing disk from golden image..."
             $VHDPath = Join-Path $VMLoc "$VMName.vhdx"
 
@@ -4516,7 +4759,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         # ---- Create Hyper-V VM ----
         Update-CreateProgress -Percent 88 -Status "Creating Hyper-V VM..."
         Write-Log "Creating Generation 2 Hyper-V VM..."
-        New-VM -Name $VMName -MemoryStartupBytes ($MemGB * 1GB) -Generation 2 -VHDPath $VHDPath -Path $VMLoc -SwitchName $VMSwitch | Out-Null
+        New-VM -Name $VMName -MemoryStartupBytes ($MemGB * 1GB) -Generation 2 -VHDPath $VHDPath -Path $VMLoc -SwitchName $VMSwitch -ErrorAction Stop | Out-Null
 
         # Processor
         Set-VM -Name $VMName -ProcessorCount $vCPU -ErrorAction Stop
@@ -4552,12 +4795,16 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         Write-Log "  Checkpoint Mode: $CheckpointMode"
 
         # Dynamic Memory
-        if ($EnableDynamicMem) {
-            Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -StartupBytes ($MemGB * 1GB) -MinimumBytes ($DynamicMemMinGB * 1GB) -MaximumBytes ($DynamicMemMaxGB * 1GB)
-        } else {
-            Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes ($MemGB * 1GB)
+        try {
+            if ($EnableDynamicMem) {
+                Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -StartupBytes ($MemGB * 1GB) -MinimumBytes ($DynamicMemMinGB * 1GB) -MaximumBytes ($DynamicMemMaxGB * 1GB) -ErrorAction Stop
+            } else {
+                Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes ($MemGB * 1GB) -ErrorAction Stop
+            }
+            Write-Log "  Dynamic Memory: $(if ($EnableDynamicMem){"Enabled (min ${DynamicMemMinGB}GB, max ${DynamicMemMaxGB}GB)"}else{"Disabled"})"
+        } catch {
+            Write-Log "  Dynamic Memory configuration failed: $($_.Exception.Message)" "WARN"
         }
-        Write-Log "  Dynamic Memory: $(if ($EnableDynamicMem){"Enabled (min ${DynamicMemMinGB}GB, max ${DynamicMemMaxGB}GB)"}else{"Disabled"})"
 
         # Enhanced Session
         if ($EnableEnhancedSession) {
@@ -5060,8 +5307,9 @@ $btnUpdateGPU.Add_Click({
                     } elseif (Start-VMWithRetry -VMName $VMName -MaxRetries 2) {
                         Write-Log "[$VMName] VM started." "OK"
                         # Open vmconnect if not already open
+                        $escapedVMName = [regex]::Escape($VMName)
                         $existing = Get-CimInstance Win32_Process -Filter "Name = 'vmconnect.exe'" -ErrorAction SilentlyContinue |
-                            Where-Object { $_.CommandLine -match [regex]::Escape($VMName) }
+                            Where-Object { $_.CommandLine -match "(\s|`")${escapedVMName}(`"|\s|$)" }
                         if (-not $existing) { vmconnect.exe localhost $VMName }
                     }
                 }

@@ -2568,7 +2568,7 @@ $form.Font              = $script:FontMain
 $form.AutoScaleMode     = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.BackColor         = [System.Drawing.Color]::FromArgb(24, 26, 31)
 $form.ForeColor         = [System.Drawing.Color]::White
-$form.Padding           = New-Object System.Windows.Forms.Padding(6)
+$form.Padding           = New-Object System.Windows.Forms.Padding(8)
 $form.KeyPreview        = $true
 
 # Theme palette
@@ -2598,6 +2598,7 @@ $tabControl.ItemSize   = New-Object System.Drawing.Size(150, 32)
 $tabControl.SizeMode   = [System.Windows.Forms.TabSizeMode]::Fixed
 $tabControl.Padding    = New-Object System.Drawing.Point(14, 4)
 $tabControl.BackColor  = $theme.Card
+$tabControl.Margin     = New-Object System.Windows.Forms.Padding(8)
 $script:TabBrushSelected = New-Object System.Drawing.SolidBrush($theme.Accent)
 $script:TabBrushNormal   = New-Object System.Drawing.SolidBrush($theme.Surface)
 $tabControl.Add_DrawItem({
@@ -2921,6 +2922,8 @@ $ctrlCreate["ModeHint"].Size = New-Object System.Drawing.Size(820, 18)
 $ctrlCreate["ModeHint"].Location = New-Object System.Drawing.Point(8, 20)
 $ctrlCreate["ModeHint"].ForeColor = [System.Drawing.Color]::Silver
 $ctrlCreate["ModeHint"].AutoEllipsis = $true
+$ctrlCreate["ModeHint"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlCreate["ModeHint"].AutoSize = $false
 $tabCreate.Controls.Add($ctrlCreate["ModeHint"])
 
 $ctrlCreate["ValidationHint"] = New-Object System.Windows.Forms.Label
@@ -2929,6 +2932,8 @@ $ctrlCreate["ValidationHint"].Size = New-Object System.Drawing.Size(940, 20)
 $ctrlCreate["ValidationHint"].Location = New-Object System.Drawing.Point(8, 0)
 $ctrlCreate["ValidationHint"].ForeColor = $theme.Muted
 $ctrlCreate["ValidationHint"].AutoEllipsis = $true
+$ctrlCreate["ValidationHint"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlCreate["ValidationHint"].AutoSize = $false
 $tabCreate.Controls.Add($ctrlCreate["ValidationHint"])
 
 # Create VM Button
@@ -2949,6 +2954,8 @@ $ctrlCreate["CreateStatus"].Size = New-Object System.Drawing.Size(450, 34)
 $ctrlCreate["CreateStatus"].Location = New-Object System.Drawing.Point(8, 38)
 $ctrlCreate["CreateStatus"].ForeColor = [System.Drawing.Color]::Cyan
 $ctrlCreate["CreateStatus"].AutoEllipsis = $true
+$ctrlCreate["CreateStatus"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlCreate["CreateStatus"].AutoSize = $false
 $tabCreate.Controls.Add($ctrlCreate["CreateStatus"])
 
 $ctrlCreate["CreateProgress"] = New-Object System.Windows.Forms.ProgressBar
@@ -3000,6 +3007,7 @@ $ctrlGPU["VmSearch"] = New-Object System.Windows.Forms.TextBox
 $ctrlGPU["VmSearch"].Location = New-Object System.Drawing.Point(52, 21)
 $ctrlGPU["VmSearch"].Size = New-Object System.Drawing.Size(210, 24)
 $ctrlGPU["VmSearch"].Text = ""
+$ctrlGPU["VmSearch"].Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $grpVMs.Controls.Add($ctrlGPU["VmSearch"])
 
 $btnClearVmSearch = New-Object System.Windows.Forms.Button
@@ -3008,6 +3016,7 @@ $btnClearVmSearch.Size = New-Object System.Drawing.Size(64, 24)
 $btnClearVmSearch.Location = New-Object System.Drawing.Point(270, 21)
 $btnClearVmSearch.FlatStyle = 'Flat'
 $btnClearVmSearch.ForeColor = [System.Drawing.Color]::White
+$btnClearVmSearch.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $grpVMs.Controls.Add($btnClearVmSearch)
 
 # Scrollable panel for VM checkboxes
@@ -3016,6 +3025,7 @@ $vmPanel.Location   = New-Object System.Drawing.Point(8, 52)
 $vmPanel.Size       = New-Object System.Drawing.Size(340, 308)
 $vmPanel.AutoScroll = $true
 $vmPanel.BackColor  = [System.Drawing.Color]::FromArgb(30, 30, 30)
+$vmPanel.Anchor     = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $grpVMs.Controls.Add($vmPanel)
 
 $ctrlGPU["VMCheckboxes"] = @()
@@ -3299,6 +3309,8 @@ $ctrlGPU["SelectionHint"].Size = New-Object System.Drawing.Size(500, 34)
 $ctrlGPU["SelectionHint"].Location = New-Object System.Drawing.Point(378, 492)
 $ctrlGPU["SelectionHint"].ForeColor = $theme.Muted
 $ctrlGPU["SelectionHint"].AutoEllipsis = $true
+$ctrlGPU["SelectionHint"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlGPU["SelectionHint"].AutoSize = $false
 $tabGPU.Controls.Add($ctrlGPU["SelectionHint"])
 
 $ctrlGPU["GpuStatus"] = New-Object System.Windows.Forms.Label
@@ -3307,6 +3319,8 @@ $ctrlGPU["GpuStatus"].Size = New-Object System.Drawing.Size(500, 34)
 $ctrlGPU["GpuStatus"].Location = New-Object System.Drawing.Point(378, 514)
 $ctrlGPU["GpuStatus"].ForeColor = [System.Drawing.Color]::Cyan
 $ctrlGPU["GpuStatus"].AutoEllipsis = $true
+$ctrlGPU["GpuStatus"].MaximumSize = New-Object System.Drawing.Size(2000, 0)
+$ctrlGPU["GpuStatus"].AutoSize = $false
 $tabGPU.Controls.Add($ctrlGPU["GpuStatus"])
 
 # ============================================================

@@ -479,6 +479,14 @@ function Get-ErrorGuidance {
         $hint = "For Windows 11, keep Secure Boot and TPM enabled; verify host supports vTPM."
     } elseif ($Message -match 'bcdboot|boot files|EFI') {
         $hint = "Retry with attached ISO recovery option and run Startup Repair if needed."
+    } elseif ($Message -match 'timeout|timed out|did not complete') {
+        $hint = "The operation took too long. Ensure the host is not under heavy load and retry."
+    } elseif ($Message -match 'disk is offline|disk is not accessible|DiskNumber') {
+        $hint = "The virtual disk may be locked by another process or failed to mount. Restart Hyper-V services and retry."
+    } elseif ($Message -match 'checkpoint|snapshot') {
+        $hint = "Delete or merge existing checkpoints for this VM and retry the operation."
+    } elseif ($Message -match 'WMI|CIM|ManagementException') {
+        $hint = "A WMI/CIM query failed. Restart the 'Hyper-V Virtual Machine Management' (VMMS) service and retry."
     }
 
     return $hint
@@ -1088,13 +1096,9 @@ function Set-VMGuestSecureBoot {
     }
     $templates = $TemplateOrder
     if (-not $templates -or $templates.Count -eq 0) {
-        $templates = if ($GuestIsWindows11) {
-            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
-        } elseif ($GuestBuild -gt 0 -and $GuestBuild -lt $script:BUILD_WIN10_RS4) {
-            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
-        } else {
-            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
-        }
+        # Default template order: MicrosoftWindows is preferred for modern images,
+        # MicrosoftUEFICertificateAuthority is fallback for broader compatibility
+        $templates = @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
     }
 
     $lastTemplateError = $null
@@ -2067,11 +2071,8 @@ function Resolve-GuestWindowsProfile {
         RequireTPM              = $isWin11
         DefaultSecureBoot       = $defaultSecureBoot
         DefaultTPM              = $defaultTPM
-        SecureBootTemplateOrder = if ($isWin11 -or $isLegacyWin10) {
-            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
-        } else {
-            @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
-        }
+        # Default template order: MicrosoftWindows preferred, MicrosoftUEFICertificateAuthority as fallback
+        SecureBootTemplateOrder = @('MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
         CompatibilityNote       = $compatibilityNote
     }
 }
@@ -4948,6 +4949,7 @@ function Update-CreateValidationHint {
     $userOk = (-not [string]::IsNullOrWhiteSpace($userName)) -and ($userName -match '^[a-zA-Z0-9]+$') -and ($userName -ine $vmName)
     $passwordOk = (-not [string]::IsNullOrWhiteSpace($passwordText))
     $passwordWeak = $false
+    $passwordWeakReason = ""
     if ($passwordOk) {
         $hasMinLength = ($passwordText.Length -ge 8)
         $hasUpper = ($passwordText -cmatch '[A-Z]')
@@ -4956,6 +4958,15 @@ function Update-CreateValidationHint {
         $hasSpecial = ($passwordText -match '[^a-zA-Z0-9]')
         $complexityScore = @($hasUpper, $hasLower, $hasDigit, $hasSpecial) | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count
         $passwordWeak = (-not $hasMinLength -or $complexityScore -lt 3)
+        if ($passwordWeak) {
+            $missingReqs = @()
+            if (-not $hasMinLength) { $missingReqs += "8+ chars" }
+            if (-not $hasUpper) { $missingReqs += "uppercase" }
+            if (-not $hasLower) { $missingReqs += "lowercase" }
+            if (-not $hasDigit) { $missingReqs += "number" }
+            if (-not $hasSpecial) { $missingReqs += "special char" }
+            $passwordWeakReason = "needs: $($missingReqs -join ', ')"
+        }
     }
 
     # Golden image mode uses the embedded user profile - skip user/password checks
@@ -4968,7 +4979,7 @@ function Update-CreateValidationHint {
     $tick = [char]0x2713
     $cross = [char]0x2717
     $isReady = ($nameOk -and $sourceOk -and $networkOk -and $userOk -and $passwordOk)
-    $pwLabel = if ($passwordWeak) { "Password(weak)" } else { "Password" }
+    $pwLabel = if ($passwordWeak -and $passwordWeakReason) { "Password($passwordWeakReason)" } elseif ($passwordWeak) { "Password(weak)" } else { "Password" }
     $ctrlCreate["ValidationHint"].Text = "Checks: Name $(if($nameOk){$tick}else{$cross}) | Source $(if($sourceOk){$tick}else{$cross}) | Network $(if($networkOk){$tick}else{$cross}) | User $(if($userOk){$tick}else{$cross}) | $pwLabel $(if($passwordOk){$tick}else{$cross})"
 
     if ($isReady) {
@@ -5751,10 +5762,10 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             Update-CreateProgress -Percent 30 -Status "Creating virtual disk..."
             $VHDPath = Join-Path $VMLoc "$VMName.vhdx"
             if ($FixedVHD) {
-                Write-Log "Creating fixed VHDX ($DiskGB GB)..."
+                Write-Log "Creating fixed VHDX ($DiskGB GB)..." "INFO"
                 New-VHD -Path $VHDPath -SizeBytes ($DiskGB * 1GB) -Fixed -ErrorAction Stop | Out-Null
             } else {
-                Write-Log "Creating dynamic VHDX ($DiskGB GB max)..."
+                Write-Log "Creating dynamic VHDX ($DiskGB GB max)..." "INFO"
                 New-VHD -Path $VHDPath -SizeBytes ($DiskGB * 1GB) -Dynamic -ErrorAction Stop | Out-Null
             }
             if (-not (Test-Path $VHDPath)) {
@@ -5849,7 +5860,7 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         $QresDestDir = Join-Path "$driveLetter\" "Windows\Temp"
         if (-not (Test-Path $QresDestDir)) { New-Item -Path $QresDestDir -ItemType Directory -Force | Out-Null }
         Copy-Item -Path $tempExe -Destination (Join-Path $QresDestDir "QRes.exe") -Force
-        Write-Log "QRes.exe injected"
+        Write-Log "QRes.exe injected" "OK"
 
         # SetupComplete.cmd
         $VMSetupScriptsDir = Join-Path "$driveLetter\" "Windows\Setup\Scripts"
@@ -5971,10 +5982,14 @@ assign letter=$freeLetter
             throw "EFI partition inaccessible after all mount attempts (original letter, refresh, Add-PartitionAccessPath, diskpart). Cannot write boot files."
         }
 
-        Write-Log "Creating UEFI boot files on $efiDrive..."
+        Write-Log "Creating UEFI boot files on $efiDrive..." "INFO"
 
         $bootSuccess = $false
         $attachISOForRecovery = $false
+
+        # Resolve host bcdboot once for reuse across multiple attempts
+        $hostBcdboot = Join-Path $env:WINDIR 'System32\bcdboot.exe'
+        if (-not (Test-Path $hostBcdboot)) { $hostBcdboot = 'bcdboot.exe' }
 
         # Attempt 1: Use the applied image's bcdboot (most compatible for old Win10)
         $imageBcdboot = Join-Path "$driveLetter\Windows\System32" "bcdboot.exe"
@@ -6001,8 +6016,6 @@ assign letter=$freeLetter
 
         # Attempt 2: Use host's bcdboot
         if (-not $bootSuccess) {
-            $hostBcdboot = Join-Path $env:WINDIR 'System32\bcdboot.exe'
-            if (-not (Test-Path $hostBcdboot)) { $hostBcdboot = 'bcdboot.exe' }
             for ($retry = 1; $retry -le 3; $retry++) {
                 try {
                     Write-Log "Boot attempt $retry/3: Using host bcdboot..."
@@ -6023,8 +6036,6 @@ assign letter=$freeLetter
 
         # Attempt 3: Host bcdboot with /f ALL for broader compatibility
         if (-not $bootSuccess) {
-            $hostBcdboot = Join-Path $env:WINDIR 'System32\bcdboot.exe'
-            if (-not (Test-Path $hostBcdboot)) { $hostBcdboot = 'bcdboot.exe' }
             for ($retry = 1; $retry -le 2; $retry++) {
                 try {
                     Write-Log "Boot attempt $retry/2: Using host bcdboot with /f ALL fallback..."
@@ -6099,7 +6110,7 @@ assign letter=$freeLetter
                     Copy-Item -Path $srcBootmgr -Destination (Join-Path $efiFallbackDir $fallbackName) -Force
                     Write-Log "Copied bootmgfw.efi to EFI partition + fallback $fallbackName" "OK"
                     # Copy remaining boot resources (fonts, locales, memtest, etc.)
-                    $srcBootDir = Join-Path "$driveLetter\Windows\Boot\EFI" ""
+                    $srcBootDir = "$driveLetter\Windows\Boot\EFI\"
                     if (Test-Path $srcBootDir) {
                         Get-ChildItem -Path $srcBootDir -Recurse -ErrorAction SilentlyContinue |
                             ForEach-Object {
@@ -6114,8 +6125,6 @@ assign letter=$freeLetter
                     }
                     # Re-run bcdboot to create the BCD store referencing these files
                     Start-Sleep -Seconds 1
-                    $hostBcdboot = Join-Path $env:WINDIR 'System32\bcdboot.exe'
-                    if (-not (Test-Path $hostBcdboot)) { $hostBcdboot = 'bcdboot.exe' }
                     $result = & $hostBcdboot "$driveLetter\Windows" /s $efiDrive /f UEFI 2>&1
                     if ($LASTEXITCODE -eq 0 -and (Test-Path $bcdStore)) {
                         Write-Log "BCD store created after manual boot file copy." "OK"
@@ -6177,27 +6186,27 @@ assign letter=$freeLetter
             }
 
             } finally {
-            # ---- Dismount VHD (in finally to guarantee cleanup) ----
-            if ($vhdMountedForDeploy -and $VHDPath) {
-            Update-CreateProgress -Percent 80 -Status "Finalizing disk images..."
-            if (Dismount-ImageRetry -ImagePath $VHDPath) {
-                Write-Log "VHD dismounted." "OK"
-            } else {
-                try {
-                    Dismount-VHD -Path $VHDPath -ErrorAction SilentlyContinue
-                    Unregister-TrackedMountedImage -ImagePath $VHDPath
-                } catch {
-                    Write-Log "VHD dismount fallback failed: $($_.Exception.Message)" "WARN"
+                # ---- Dismount VHD (in finally to guarantee cleanup) ----
+                if ($vhdMountedForDeploy -and $VHDPath) {
+                    Update-CreateProgress -Percent 80 -Status "Finalizing disk images..."
+                    if (Dismount-ImageRetry -ImagePath $VHDPath) {
+                        Write-Log "VHD dismounted." "OK"
+                    } else {
+                        try {
+                            Dismount-VHD -Path $VHDPath -ErrorAction SilentlyContinue
+                            Unregister-TrackedMountedImage -ImagePath $VHDPath
+                        } catch {
+                            Write-Log "VHD dismount fallback failed: $($_.Exception.Message)" "WARN"
+                        }
+                        Write-Log "VHD dismount required fallback and may still be attached." "WARN"
+                    }
                 }
-                Write-Log "VHD dismount required fallback and may still be attached." "WARN"
-            }
-            }
             }
 
             if ($script:MountedISO) {
                 try {
                     if (Dismount-ImageRetry -ImagePath $script:MountedISO.ImagePath) {
-                        Write-Log "ISO dismounted."
+                        Write-Log "ISO dismounted." "OK"
                     }
                 } catch {
                     Write-Log "ISO dismount warning: $($_.Exception.Message)" "WARN"
@@ -6344,6 +6353,10 @@ assign letter=$freeLetter
         if (-not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
             throw "Hyper-V did not report VM '$VMName' after New-VM completed."
         }
+        # VM object exists — from this point forward, configuration failures should
+        # not destroy the VM.  The user would rather have a partially-configured VM
+        # than lose all work (VHD deploy, unattend injection, etc.).
+        $rollbackNeeded = $false
 
         # Processor
         Set-VM -Name $VMName -ProcessorCount $vCPU -ErrorAction Stop
@@ -6390,7 +6403,7 @@ assign letter=$freeLetter
         # Enhanced Session
         if ($EnableEnhancedSession) {
             try {
-                $enableEnhancedSession = $true
+                $proceedWithEnhancedSession = $true
                 try {
                     $hostInfo = Get-VMHost -ErrorAction Stop
                     if ($hostInfo -and -not $hostInfo.EnableEnhancedSessionMode) {
@@ -6400,7 +6413,7 @@ assign letter=$freeLetter
                             [System.Windows.Forms.MessageBoxButtons]::YesNo,
                             [System.Windows.Forms.MessageBoxIcon]::Warning)
                         if ($confirmEnhancedSession -ne [System.Windows.Forms.DialogResult]::Yes) {
-                            $enableEnhancedSession = $false
+                            $proceedWithEnhancedSession = $false
                             Write-Log "  Enhanced Session: skipped host-wide change by user choice." "WARN"
                         }
                     }
@@ -6408,7 +6421,7 @@ assign letter=$freeLetter
                     Write-Log "  Enhanced Session pre-check warning: $($_.Exception.Message)" "WARN"
                 }
 
-                if (-not $enableEnhancedSession) {
+                if (-not $proceedWithEnhancedSession) {
                     throw "Enhanced Session host-wide change was not approved"
                 }
                 Set-VMHost -EnableEnhancedSessionMode $true -ErrorAction Stop
@@ -6534,9 +6547,11 @@ assign letter=$freeLetter
         Update-CreateProgress -Percent 100 -Status "VM creation completed successfully"
 
         # Refresh GPU tab VM list
-        Update-VMList
-
-        $rollbackNeeded = $false
+        try {
+            Update-VMList
+        } catch {
+            Write-Log "GPU tab VM list refresh failed (non-critical): $($_.Exception.Message)" "WARN"
+        }
 
         } catch {
             # Handle validation errors vs other unexpected errors
@@ -7089,10 +7104,13 @@ $btnUpdateGPU.Add_Click({
         }
         $script:IsUpdatingGPU = $false
         $tabControl.Enabled   = $true
+        $btnUpdateGPU.Enabled = $true
         if ($ctrlGPU.ContainsKey("GpuStatus") -and $ctrlGPU["GpuStatus"]) {
             $ctrlGPU["GpuStatus"].Text = ""
         }
-        Update-GpuActionState
+        try { Update-GpuActionState } catch {
+            Write-Log "GPU action state refresh failed (non-critical): $($_.Exception.Message)" "WARN"
+        }
     }
 })
 
@@ -7114,14 +7132,14 @@ $form.Add_FormClosing({
     }
     Invoke-MountCleanup
     # Dispose timers
-    if ($script:ValidationTimer)  { $script:ValidationTimer.Stop();  $script:ValidationTimer.Dispose() }
-    if ($script:VmFilterTimer)    { $script:VmFilterTimer.Stop();    $script:VmFilterTimer.Dispose() }
-    if ($script:LayoutTimer)      { $script:LayoutTimer.Stop();      $script:LayoutTimer.Dispose() }
+    if ($script:ValidationTimer)  { try { $script:ValidationTimer.Stop();  $script:ValidationTimer.Dispose() } catch {} }
+    if ($script:VmFilterTimer)    { try { $script:VmFilterTimer.Stop();    $script:VmFilterTimer.Dispose() } catch {} }
+    if ($script:LayoutTimer)      { try { $script:LayoutTimer.Stop();      $script:LayoutTimer.Dispose() } catch {} }
     # Dispose cached brushes
-    if ($script:TabBrushSelected) { $script:TabBrushSelected.Dispose() }
-    if ($script:TabBrushNormal)   { $script:TabBrushNormal.Dispose() }
+    if ($script:TabBrushSelected) { try { $script:TabBrushSelected.Dispose() } catch {} }
+    if ($script:TabBrushNormal)   { try { $script:TabBrushNormal.Dispose() } catch {} }
     # Dispose tooltip
-    if ($toolTip)                 { $toolTip.Dispose() }
+    if ($toolTip)                 { try { $toolTip.Dispose() } catch {} }
     # Dispose cached fonts (moved here so they survive any final paint events)
     foreach ($f in @($script:FontMain, $script:FontTabHeader, $script:FontHeader, $script:FontBoldButton,
                      $script:FontSmall, $script:FontBoldLabel, $script:FontConsolas, $script:FontSidebarNav,

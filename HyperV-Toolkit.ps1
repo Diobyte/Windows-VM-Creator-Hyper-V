@@ -1336,7 +1336,7 @@ function Test-GpuPHostReadiness {
     }
 }
 
-function Ensure-HostGpuPartitionCountValid {
+function Confirm-HostGpuPartitionCountValid {
     [CmdletBinding()]
     param(
         [string]$PreferredGpuName = ""
@@ -1902,13 +1902,6 @@ function Copy-GpuReferencedFiles {
         $hostWindowsRoot = [System.IO.Path]::GetFullPath($env:WINDIR)
         $hostWindowsRootLower = $hostWindowsRoot.ToLowerInvariant()
 
-        foreach ($driver in $driverEntries) {
-            $infPath = $driver.InfName
-            if (-not $infPath) { continue }
-            if (-not [System.IO.Path]::IsPathRooted($infPath)) {
-                $infPath = Join-Path $env:WINDIR "INF\$infPath"
-            }
-            if (-not (Test-Path $infPath)) { continue }
         $hostDriverStoreRootLower = (Join-Path $hostWindowsRoot 'System32\DriverStore').ToLowerInvariant()
 
         foreach ($drv in $driverEntries) {
@@ -6674,7 +6667,7 @@ $btnUpdateGPU.Add_Click({
             }
 
             $preferredHostGpuName = if ($providerObj -and $providerObj.Provider) { [string]$providerObj.Name } else { "" }
-            $partitionCountFix = Ensure-HostGpuPartitionCountValid -PreferredGpuName $preferredHostGpuName
+            $partitionCountFix = Confirm-HostGpuPartitionCountValid -PreferredGpuName $preferredHostGpuName
             if (-not $partitionCountFix.Success) {
                 if ($strictChecks) {
                     Write-Log "GPU host partition-count validation failed: $($partitionCountFix.Message). Aborting due to strict checks." "ERROR"

@@ -1446,12 +1446,15 @@ function Get-GuestWindowsBuildFromMountedVolume {
     $softwareHive = Join-Path "$MountLetter\" 'Windows\System32\Config\SOFTWARE'
     if (-not (Test-Path $softwareHive)) { return 0 }
 
+    $regExe = Join-Path $env:WINDIR 'System32\reg.exe'
+    if (-not (Test-Path $regExe)) { $regExe = 'reg.exe' }
+
     $hiveName = "__gpu_guest_build_$([Guid]::NewGuid().ToString('N'))"
     $hiveRoot = "HKU\$hiveName"
     $loaded = $false
 
     try {
-        & reg.exe load $hiveRoot "$softwareHive" *> $null
+        & $regExe load $hiveRoot "$softwareHive" *> $null
         if ($LASTEXITCODE -ne 0) { return 0 }
         $loaded = $true
 
@@ -1465,7 +1468,10 @@ function Get-GuestWindowsBuildFromMountedVolume {
         return 0
     } finally {
         if ($loaded) {
-            & reg.exe unload $hiveRoot *> $null
+            # Release .NET handles to hive keys before unload to avoid 'Access denied'
+            [GC]::Collect()
+            Start-Sleep -Milliseconds 300
+            & $regExe unload $hiveRoot *> $null
         }
     }
 }
@@ -1510,12 +1516,15 @@ function Set-GuestGpuRegistryMitigations {
         return
     }
 
+    $regExe = Join-Path $env:WINDIR 'System32\reg.exe'
+    if (-not (Test-Path $regExe)) { $regExe = 'reg.exe' }
+
     $hiveName = "__gpup_sysfix_$([Guid]::NewGuid().ToString('N'))"
     $hiveRoot = "HKU\$hiveName"
     $loaded   = $false
 
     try {
-        & reg.exe load $hiveRoot "$systemHive" *> $null
+        & $regExe load $hiveRoot "$systemHive" *> $null
         if ($LASTEXITCODE -ne 0) {
             Write-Log "[$VMName] Could not load guest SYSTEM hive for GPU-P registry mitigations (exit $LASTEXITCODE)." "WARN"
             return
@@ -1567,7 +1576,7 @@ function Set-GuestGpuRegistryMitigations {
         if ($loaded) {
             [GC]::Collect()
             Start-Sleep -Milliseconds 500
-            & reg.exe unload $hiveRoot *> $null
+            & $regExe unload $hiveRoot *> $null
             if ($LASTEXITCODE -ne 0) {
                 Write-Log "[$VMName] Warning: guest SYSTEM hive unload returned exit $LASTEXITCODE. A reboot of the host may be needed to release the hive lock." "WARN"
             }
@@ -1631,6 +1640,40 @@ function Get-GpuPartitionValues {
     }
 }
 
+function Resolve-GpuPnpDevice {
+    <#
+    .SYNOPSIS
+        Resolves a GPU PnP device by friendly name or by AUTO-detecting the first
+        partitionable GPU via Hyper-V WMI.  Shared helper used by Copy-GpuServiceDriver
+        and Copy-GpuReferencedFiles to avoid duplicate resolution logic.
+    .OUTPUTS
+        A PnP device object, or $null if resolution fails.
+    #>
+    param([string]$GPUName = "AUTO")
+
+    if ($GPUName -ne "AUTO") {
+        return (Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue |
+            Where-Object { $_.FriendlyName -eq $GPUName } | Select-Object -First 1)
+    }
+
+    $partList = Get-CimInstance -Namespace "ROOT\virtualization\v2" -ClassName "Msvm_PartitionableGpu" -ErrorAction SilentlyContinue
+    if (-not $partList) { return $null }
+
+    $devPath = if ($partList.Name -is [array]) { $partList.Name[0] } else { $partList.Name }
+    $pciSegments = $devPath -split '#'
+    $matchPattern = if ($pciSegments.Count -gt 1 -and $pciSegments[1].Length -ge 8) {
+        "*$($pciSegments[1].Substring(0, [Math]::Min($pciSegments[1].Length, 21)))*"
+    } elseif ($devPath.Length -ge 24) {
+        "*$($devPath.Substring(8, 16))*"   # Legacy fallback
+    } else {
+        $null
+    }
+
+    if (-not $matchPattern) { return $null }
+    return (Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue |
+        Where-Object { $_.DeviceID -like $matchPattern } | Select-Object -First 1)
+}
+
 function Copy-GpuServiceDriver {
     <#
     .SYNOPSIS
@@ -1643,30 +1686,7 @@ function Copy-GpuServiceDriver {
         [string]$GPUName = "AUTO"
     )
     try {
-        $gpu = $null
-        if ($GPUName -eq "AUTO") {
-            $partList = Get-CimInstance -Namespace "ROOT\virtualization\v2" -ClassName "Msvm_PartitionableGpu" -ErrorAction SilentlyContinue
-            if ($partList) {
-                $devPath = if ($partList.Name -is [array]) { $partList.Name[0] } else { $partList.Name }
-                # Extract PCI bus/device/function segment dynamically from the device path
-                # Typical format: PCIP\VEN_XXXX&DEV_XXXX&... - extract the VEN&DEV segment after the first '#'
-                $pciSegments = $devPath -split '#'
-                $matchPattern = if ($pciSegments.Count -gt 1 -and $pciSegments[1].Length -ge 8) {
-                    "*$($pciSegments[1].Substring(0, [Math]::Min($pciSegments[1].Length, 21)))*"
-                } elseif ($devPath.Length -ge 24) {
-                    "*$($devPath.Substring(8, 16))*"   # Legacy fallback
-                } else {
-                    $null
-                }
-                if ($matchPattern) {
-                    $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object {
-                        $_.DeviceID -like $matchPattern
-                    } | Select-Object -First 1
-                }
-            }
-        } else {
-            $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq $GPUName } | Select-Object -First 1
-        }
+        $gpu = Resolve-GpuPnpDevice -GPUName $GPUName
 
         if (-not $gpu) {
             Write-Log "Could not resolve GPU PnP device for service driver copy" "WARN"
@@ -1860,28 +1880,7 @@ function Copy-GpuReferencedFiles {
             return @{ Success = $false; Copied = 0 }
         }
 
-        $gpu = $null
-        if ($GPUName -eq "AUTO") {
-            $partList = Get-CimInstance -Namespace "ROOT\virtualization\v2" -ClassName "Msvm_PartitionableGpu" -ErrorAction SilentlyContinue
-            if ($partList) {
-                $devPath = if ($partList.Name -is [array]) { $partList.Name[0] } else { $partList.Name }
-                $pciSegments = $devPath -split '#'
-                $matchPattern = if ($pciSegments.Count -gt 1 -and $pciSegments[1].Length -ge 8) {
-                    "*$($pciSegments[1].Substring(0, [Math]::Min($pciSegments[1].Length, 21)))*"
-                } elseif ($devPath.Length -ge 24) {
-                    "*$($devPath.Substring(8, 16))*"
-                } else {
-                    $null
-                }
-                if ($matchPattern) {
-                    $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object {
-                        $_.DeviceID -like $matchPattern
-                    } | Select-Object -First 1
-                }
-            }
-        } else {
-            $gpu = Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq $GPUName } | Select-Object -First 1
-        }
+        $gpu = Resolve-GpuPnpDevice -GPUName $GPUName
 
         if (-not $gpu) {
             Write-Log "Could not resolve GPU PnP device for referenced file copy" "WARN"
@@ -2130,6 +2129,7 @@ function Invoke-DismApplyImage {
         # Each output line is written individually so Receive-Job can stream progress.
         $dismJob = Start-Job -ScriptBlock {
             param($dismArgsForJob)
+            $ErrorActionPreference = 'Continue'  # Allow DISM to return non-zero exit codes without terminating
             & dism @dismArgsForJob 2>&1 | ForEach-Object { Write-Output $_ }
             Write-Output "__DISM_EXIT__:$LASTEXITCODE"
         } -ArgumentList (,$dismArgsForJob)
@@ -2754,8 +2754,14 @@ function Copy-DriversToVhd {
             $driveLetter = ($target -split ':')[0]
             $volume = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
             if ($volume -and $volume.FileSystem -eq 'NTFS') {
-                & takeown.exe /F "$target" /R /D Y 2>$null | Out-Null
-                & icacls.exe "$target" /grant Administrators:F /T /C 2>$null | Out-Null
+                $takeownResult = & takeown.exe /F "$target" /R /D Y 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Log "[$VMName] takeown.exe returned exit code $LASTEXITCODE for '$target' (non-fatal)" "WARN"
+                }
+                $icaclsResult = & icacls.exe "$target" /grant Administrators:F /T /C 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Log "[$VMName] icacls.exe returned exit code $LASTEXITCODE for '$target' (non-fatal)" "WARN"
+                }
             }
             Remove-Item -Path $target -Recurse -Force -ErrorAction Stop
         } catch {
@@ -5780,6 +5786,14 @@ TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             $vhdMountedForDeploy = $true
             try {
             $diskNumber = $mountedVHD.DiskNumber
+            # Safety: prevent catastrophic operations on the system disk (disk 0)
+            $systemDisk = (Get-Disk -Number 0 -ErrorAction SilentlyContinue)
+            if ($null -ne $systemDisk -and $diskNumber -eq $systemDisk.Number) {
+                throw "SAFETY: Mounted VHD resolved to the system disk (Disk 0). Aborting to prevent data loss."
+            }
+            if ($null -eq $diskNumber) {
+                throw "Mounted VHD did not return a valid disk number."
+            }
             Initialize-Disk -Number $diskNumber -PartitionStyle GPT -PassThru | Out-Null
 
             # EFI System Partition (260MB for better compatibility with old Win10)
@@ -6200,6 +6214,10 @@ assign letter=$freeLetter
                         }
                         Write-Log "VHD dismount required fallback and may still be attached." "WARN"
                     }
+                    # Wait for the VHD to fully detach before Hyper-V tries to use it
+                    if (-not (Wait-ImageDetached -ImagePath $VHDPath -TimeoutSec 15)) {
+                        Write-Log "VHD still appears attached after dismount. Hyper-V may fail to start the VM until it is released." "WARN"
+                    }
                 }
             }
 
@@ -6310,6 +6328,9 @@ assign letter=$freeLetter
                                     Write-Log "Golden parent build detection warning: $($_.Exception.Message)" "WARN"
                                 } finally {
                                     if ($goldenHiveLoaded) {
+                                        # Release .NET handles before hive unload
+                                        [GC]::Collect()
+                                        Start-Sleep -Milliseconds 300
                                         & $regExe unload "HKU\__golden_detect" 2>&1 | Out-Null
                                         $goldenHiveLoaded = $false
                                     }
@@ -6324,6 +6345,9 @@ assign letter=$freeLetter
             } finally {
                 if ($goldenHiveLoaded) {
                     try {
+                        # Release .NET handles before hive unload
+                        [GC]::Collect()
+                        Start-Sleep -Milliseconds 300
                         & $regExe unload "HKU\__golden_detect" 2>&1 | Out-Null
                         $goldenHiveLoaded = $false
                     } catch {

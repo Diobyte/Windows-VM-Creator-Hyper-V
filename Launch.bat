@@ -92,13 +92,14 @@ if %ERRORLEVEL% neq 0 (
 )
 
 :: ----------------------------------------------------------------
-:: Elevated instance setup
+:: Elevated instance setup — strip the --elevated sentinel flag
+:: CMD's shift does NOT update %*, so we call a subroutine to rebuild
+:: USER_ARGS without the sentinel to avoid leaking it to PowerShell.
 :: ----------------------------------------------------------------
 if /i "%~1"=="--elevated" (
     title Hyper-V Toolkit Launcher  [Administrator]
     call :log "Running elevated launcher instance"
-    shift
-    set "USER_ARGS=%*"
+    call :strip_elevated %*
 )
 
 cd /d "%SCRIPT_DIR%"
@@ -141,6 +142,18 @@ if %LAUNCH_EXIT_CODE% neq 0 (
 
 endlocal
 exit /b %LAUNCH_EXIT_CODE%
+
+:: ----------------------------------------------------------------
+:strip_elevated
+:: Rebuilds USER_ARGS from %* with the first --elevated token removed.
+:: Called via 'call :strip_elevated %*' so shift works inside the sub.
+set "USER_ARGS="
+shift
+:strip_loop
+if "%~1"=="" goto :eof
+if defined USER_ARGS (set "USER_ARGS=%USER_ARGS% %~1") else (set "USER_ARGS=%~1")
+shift
+goto :strip_loop
 
 :: ----------------------------------------------------------------
 :log
